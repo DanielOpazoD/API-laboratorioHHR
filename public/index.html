@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syslab 2.0 | Gestión Médica</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="loader-overlay" id="loader">
+        <div style="text-align: center;">
+            <div class="spinner"></div>
+            <p style="margin-top: 1rem; font-weight: 500; color: var(--primary);">Navegando por la Intranet...</p>
+        </div>
+    </div>
+
+    <main class="app-container">
+        <header>
+            <h1>Visor de Exámenes</h1>
+            <p class="subtitle">Acceso automatizado y seguro al portal Syslab</p>
+        </header>
+
+        <section class="search-box">
+            <div class="input-group">
+                <input type="text" id="rutInput" placeholder="Ingrese RUT sin puntos ni guión" autofocus>
+            </div>
+            <button id="searchBtn" onclick="searchExams()">
+                <span>🔍</span> Consultar
+            </button>
+        </section>
+
+        <section id="resultsSection" class="results-section" style="display: none;">
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="checkbox-cell"></th>
+                            <th>Fecha</th>
+                            <th>Orden / ID</th>
+                            <th>Lista de Exámenes</th>
+                            <th>Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody id="examsBody">
+                        <!-- Se llena dinámicamente -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Acciones Rápidas (Checkboxes) -->
+            <div id="actionsBar" class="actions-bar">
+                <span id="selectedCount" style="color: #065f46; font-weight: 600;">0 seleccionado(s)</span>
+                <button class="summary-btn" onclick="generateSummary()">
+                    <span>📋</span> Generar Resumen Seleccionados
+                </button>
+            </div>
+        </section>
+
+        <!-- Vista de Resumen -->
+        <section id="summaryContainer" class="summary-container">
+            <div class="summary-header">
+                <h2 style="color: var(--secondary);">Resumen de Selección</h2>
+                <button onclick="closeSummary()" style="background: none; color: #ef4444; border: 1px solid #ef4444; padding: 0.5rem 1rem; box-shadow: none;">Cerrar</button>
+            </div>
+            <div id="summaryBody">
+                <!-- Se llena dinámicamente -->
+            </div>
+            <div style="margin-top: 2rem; text-align: right;">
+                <button onclick="window.print()" style="background: #64748b; font-size: 0.9rem;">
+                    <span>🖨️</span> Imprimir Resumen
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

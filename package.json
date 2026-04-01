@@ -1,0 +1,15 @@
+{
+  "name": "syslab-scraper",
+  "version": "1.0.0",
+  "description": "Automatización para buscar exámenes en Syslab",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.40.0",
+    "tesseract.js": "^7.0.0"
+  }
+}
