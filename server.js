@@ -3,10 +3,12 @@ const path = require('path');
 const config = require('./config/env');
 const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
+const cors = require('cors');
 
 const app = express();
 
 // Middlewares
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 

@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const examController = require('../controllers/examController');
-const syncController = require('../controllers/syncController');
 
 /**
  * GET /api/exams
@@ -14,11 +13,5 @@ router.get('/exams', examController.getExams);
  * Body: { links: string[] }
  */
 router.post('/exams/details', examController.getExamsDetails);
-
-/**
- * POST /api/sync/labs
- * Inicia la sincronización masiva de pacientes HHR -> Syslab -> HHR
- */
-router.post('/sync/labs', syncController.runSync);
 
 module.exports = router;
