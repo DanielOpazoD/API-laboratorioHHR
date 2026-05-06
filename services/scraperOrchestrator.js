@@ -26,6 +26,32 @@ class ScraperOrchestrator {
     return results;
   }
 
+  extractExamsFromDocument() {
+    const rows = Array.from(document.querySelectorAll('table.narrow tr'));
+    return rows.map(row => {
+      const tds = row.querySelectorAll('td');
+      if (tds.length < 6) return null;
+      const aTag = tds[0].querySelector('a');
+      const href = aTag ? aTag.getAttribute('href') : '';
+      const id = aTag ? aTag.innerText.trim() : tds[0].innerText.trim();
+      if (!id || !/^\d+$/.test(id)) return null;
+      if (href && !href.includes('detalleexamenes.php')) return null;
+
+      const rawDate = tds[1].innerHTML;
+      const dateParts = rawDate.split('<br>');
+      const date = dateParts[0] ? dateParts[0].trim() : tds[1].innerText.trim();
+      const time = dateParts[1] ? dateParts[1].replace(/<[^>]+>/g, '').trim() : '';
+      const patientName = tds[3].innerText.trim();
+      const origin = tds[4].innerText.trim();
+      const examsTags = Array.from(tds[5].querySelectorAll('.mitabla tr td'));
+      const examNames = examsTags
+        .map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim())
+        .filter(e => e !== '');
+      const link = href ? new URL(href.trim(), document.baseURI || window.location.href).href : null;
+      return { id, link, date, time, patientName, origin, exams: examNames };
+    }).filter(Boolean);
+  }
+
   async getExamsList(rut) {
     let browser, context, page;
     try {
@@ -74,25 +100,7 @@ class ScraperOrchestrator {
       }
       // === FIN DIAGNÓSTICO ===
 
-      const exams = await page.$$eval('table.narrow tr.odd, table.narrow tr.even', rows => {
-        return rows.map(row => {
-          const tds = row.querySelectorAll('td');
-          if (tds.length < 6) return null;
-          const aTag = tds[0].querySelector('a');
-          const href = aTag ? aTag.getAttribute('href') : '';
-          const id = aTag ? aTag.innerText.trim() : tds[0].innerText.trim();
-          const rawDate = tds[1].innerHTML; 
-          const dateParts = rawDate.split('<br>');
-          const date = dateParts[0] ? dateParts[0].trim() : tds[1].innerText.trim();
-          const time = dateParts[1] ? dateParts[1].replace(/<[^>]+>/g, '').trim() : '';
-          const patientName = tds[3].innerText.trim();
-          const origin = tds[4].innerText.trim();
-          const examsTags = Array.from(tds[5].querySelectorAll('.mitabla tr td'));
-          const examNames = examsTags.map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim()).filter(e => e !== '');
-          const link = href ? new URL(href.trim(), window.location.href).href : null;
-          return { id, link, date, time, patientName, origin, exams: examNames };
-        }).filter(Boolean);
-      });
+      const exams = await page.evaluate(this.extractExamsFromDocument);
 
       const screenshot = await page.screenshot({ fullPage: true });
       return { success: true, data: exams, screenshot: `data:image/png;base64,${screenshot.toString('base64')}` };
