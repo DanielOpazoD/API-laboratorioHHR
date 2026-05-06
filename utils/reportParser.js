@@ -44,9 +44,43 @@ const NUMERIC_REGEX = /^(.+?)\s*:\s*\|?\s*([<>]?\s*[\d.,]+)(.*)$/;
 const QUALITATIVE_REGEX =
   /^(.+?)\s*:\s*(NEGATIVO|POSITIVO|NORMAL|AUSENTE|PRESENTE|REACTIVO|NO\s+REACTIVO|DETECTADO|NO\s+DETECTADO|ESCASA|MODERADA|ABUNDANTE|NO\s+SE\s+OBSERVA(?:N)?)\s*$/i;
 
+const NON_ANALYTIC_ANALYSIS_PATTERNS = [
+  /^Edad$/i,
+  /^Valor\s+de\s+referencia$/i,
+  /^Profilaxis\s+trombosis\s+venosa$/i,
+  /^Prevenci[oó]n\s+tromb\.\s+recidivante\s+y\s+tratamiento$/i,
+  /^Profilaxis\s+arteriales\s+y\s+v[aá]lvulas\s+cardiacas$/i,
+  /^Equipo\s+analizador$/i,
+];
+
+const normalizeForMatch = value =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+function shouldSkipAnalysis(analysis) {
+  return NON_ANALYTIC_ANALYSIS_PATTERNS.some(pattern => pattern.test(analysis.trim()));
+}
+
+function normalizeAnalysisName(analysis) {
+  const normalized = normalizeForMatch(analysis);
+  if (
+    normalized.includes('relacion albumina/creatininuri') ||
+    normalized.includes('relac. albumina/creatininuri')
+  ) {
+    return 'RAC';
+  }
+
+  return analysis;
+}
+
 function splitUnitAndRef(rest) {
-  const cleaned = rest.replace(/^\|+\s*|\s*\|+$/g, '').trim();
+  const cleaned = rest.replace(/^\s*\|+\s*|\s*\|+\s*$/g, '').trim();
   if (!cleaned) return { unit: '', refValue: '' };
+  if (/^[<>]/.test(cleaned)) return { unit: '', refValue: cleaned.replace(/\|+/g, '').trim() };
 
   const firstSpace = cleaned.search(/\s/);
   if (firstSpace === -1) return { unit: cleaned, refValue: '' };
@@ -81,8 +115,9 @@ function parseReportText(text) {
     // Cualitativo (más específico, intenta primero)
     let m = line.match(QUALITATIVE_REGEX);
     if (m) {
-      const analysis = m[1].trim();
+      const analysis = normalizeAnalysisName(m[1].trim());
       if (analysis.length < 2 || analysis.length > 60 || analysis.includes(':')) continue;
+      if (shouldSkipAnalysis(analysis)) continue;
       parsedData.push({
         section: currentSection,
         analysis,
@@ -97,13 +132,14 @@ function parseReportText(text) {
     // Numérico
     m = line.match(NUMERIC_REGEX);
     if (m) {
-      const analysis = m[1].trim();
+      const analysis = normalizeAnalysisName(m[1].trim());
       const result = m[2].replace(/\s+/g, '');
       const { unit, refValue } = splitUnitAndRef(m[3] || '');
 
       // Filtros: nombres con ":" embebido (= cabecera multi-campo) se descartan
       if (analysis.length < 2 || analysis.length > 60) continue;
       if (analysis.includes(':')) continue;
+      if (shouldSkipAnalysis(analysis)) continue;
 
       parsedData.push({
         section: currentSection,

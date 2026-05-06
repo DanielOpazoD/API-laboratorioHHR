@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "check:syslab": "node scripts/check-syslab-operability.js",
+    "tunnel:ngrok": "ngrok http ${PORT:-3000} --url ${SYSLAB_PROXY_URL:-https://hyperkalemic-transthoracic-lecia.ngrok-free.dev}",
     "test": "jest"
   },
   "dependencies": {

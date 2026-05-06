@@ -1,70 +1,168 @@
-# Syslab Scraper & Microservicio de Integración HHR
+# Syslab Scraper & Microservicio de Integracion HHR
 
-Este proyecto es un microservicio autónomo desarrollado usando Node.js, Express, Jest y Playwright. Tiene como objetivo automatizar la extracción de exámenes de laboratorio clínico desde el portal intranet Syslab (`http://10.4.69.90/syslab/`), pasándolos por un motor de parseo de PDF para normalizarlos en un esquema JSON estructurado.
+Microservicio local en Node.js, Express y Playwright para consultar examenes de laboratorio desde el portal interno Syslab del Hospital Hanga Roa (`http://10.4.69.90/syslab/`).
 
-## Arquitectura Dual
+Este servicio existe porque Syslab no expone una API publica consumible por HHR. El scraper automatiza Chromium con Playwright, navega como usuario autenticado, extrae ordenes de laboratorio y captura PDFs para transformarlos en datos estructurados.
 
-La aplicación está diseñada bajo principios SOLID. Funciona bajo dos modalidades que interactúan armoniosamente:
+## Funcion principal
 
-### 1. Modalidad *Standalone* (API Independiente / Local Activo)
-El microservicio funciona por sí solo exponiendo una Interfaz REST para consulta dinámica:
-
-*   **`GET /api/exams?rut=XXXXX-X`**: Inicia Chromium en entorno *headless*, hace login en Syslab y devuelve las cabeceras/etiquetas de los últimos exámenes vinculados a esa persona en formato JSON.
-*   **`POST /api/exams/details`** (Recibe `{ "links": ["...", "..."] }`): Navega y extrae los recursos PDF de los exámenes alojados detrás de esos links. Los pasa por funciones puras de Regex (en `utils/reportParser.js`) que limpian el ruido bruto y entregan un objeto ordenado listando Título, Operando, Unidad y Referencia.
-
-### 2. Modalidad *Daemon HHR* (Autopilot Sync vía Firebase Admin)
-Opera como un "Trabajador de Fondo" fusionándose bidireccionalmente con el ecosistema Firestore de tu otra aplicación madre (HHR).
-
-*   **`POST /api/sync/labs`**: Es un *Webhook* asíncrono. Al ser ejecutado, devuelve inmediatamente un status `200 OK` delegando el ruteo a un worker en memoria que se conecta a Firestore, extrae la lista base de pacientes, consulta Syslab masivamente, formatea los datos y los dispara directo de vuelta a la nube de tu App HHR.
-
----
-
-## 🤖 Guía Rápida de Interoperabilidad (Para Agentes IA e Ingenieros)
-
-> **Contexto Técnico:** 
-> Si otra IA está analizando cómo unir la Aplicación A (HHR) con la Aplicación B (Este Scraper), este es el contrato que garantiza la transferencia de datos y su mutua operabilidad.
-
-#### Protocolo de Variables (Entorno)
-Este scraper necesita un `.env` en su raíz con:
-- `PORT=3000`
-- `SYSLAB_BASE_URL`, `SYSLAB_USER`, `SYSLAB_PASS`
-- `FIREBASE_SERVICE_ACCOUNT_PATH` (Apunta a las credenciales privadas `.json` extraidas de Google Cloud para eludir controles OAUTH y operar directamente sobre las colecciones).
-- `HOSPITAL_ID` (Si se omite, opera sobre la constante `'salvador'`).
-
-#### Contrato de Lectura de Firebase (Desde HHR al Scraper)
-Al lanzar el webhook de sync masivo, el scraper se dirigirá al path `hospitals/<HOSPITAL_ID>/patients` usando Admin SDK.
-Asume intrínsecamente que los IDs de los documentos (`doc.id`) de todos los pacientes en esa colección corresponden con RUTs chilenos válidos. Con esos iterables, comenzará su orquestación.
-
-#### Contrato de Inyección en Firebase (De Scraper hacia HHR)
-Una vez que el Regex termina de modelar la data extraída de Syslab, el scraper generará documentos nuevos en `hospitals/<HOSPITAL_ID>/clinicalDocuments`. 
-
-El output generado para Firestore respeta estrictamente la interfaz Typescript `ClinicalDocumentRecord` que tu arquitectura HHR espera desde hace años:
-
-```json
-{
-  "id": "uuid-v4...",
-  "episodeKey": "<string: rut del paciente>",
-  "documentType": "laboratorio_syslab",
-  "patientId": "<string: rut del paciente>",
-  "status": "signed",
-  "isLocked": true,
-  "audit": {
-    "updatedAt": "2026-04-06T...",
-    "updatedBy": "syslab-scraper-service"
-  },
-  "data": [
-    { 
-      "section": "PERFIL BIOQUÍMICO", 
-      "analysis": "Glucosa", 
-      "result": "90", 
-      "unit": "mg/dL",
-      "refValue": "70 - 99"
-    }
-  ],
-  "metadata": {
-    "originUrl": "http://10.../detalle.php..."
-  }
-}
+```text
+HHR -> Syslab Scraper -> Portal Syslab -> JSON/PDF -> HHR
 ```
 
-> **Consejo Final de Arquitectura:** En el Frontend principal de HHR, **jamás llamas** a `/api/sync/labs` usando el Fetch del navegador durante la sesión de un usuario. Esto causaría un efecto en cadena de bots lentos en Syslab. La unión correcta entre ambos mundos consiste en colgar un Cron Scheduler (Ej. Google Scheduler u otro servicio en la nube) que active mediante HTTP `POST` este webhook silencioso programándolo a las 05:00 AM y a las 14:00 PM cada día. Así la aplicación madre se alimentará automáticamente y estará fresca cuando los médicos la evalúen.
+En local, HHR llama directamente a:
+
+```text
+http://localhost:3000
+```
+
+En Netlify, HHR llama a una Function serverless (`syslab-proxy`) que a su vez llama a una URL publica configurada como `SYSLAB_PROXY_URL`. Esa URL debe ser un tunel activo hacia este scraper local.
+
+## Endpoints disponibles
+
+### `GET /health`
+
+Comprueba que el microservicio esta encendido.
+
+```bash
+curl "http://localhost:3000/health"
+```
+
+### `GET /api/exams?rut=<rut>`
+
+Busca ordenes de laboratorio por RUT.
+
+```bash
+curl "http://localhost:3000/api/exams?rut=10096004"
+```
+
+Devuelve una lista de ordenes con:
+
+- `id`
+- `link`
+- `date`
+- `time`
+- `patientName`
+- `origin`
+- `exams`
+
+### `POST /api/exams/details`
+
+Recibe links de ordenes y devuelve resultados estructurados extraidos desde PDFs.
+
+```bash
+curl -X POST "http://localhost:3000/api/exams/details" \
+  -H "Content-Type: application/json" \
+  -d '{"links":["http://10.4.69.90/syslab/detalleexamenes.php?id=..."]}'
+```
+
+### `GET /api/exams/pdf?link=<url>`
+
+Devuelve el PDF de una orden para visualizacion inline.
+
+```bash
+curl "http://localhost:3000/api/exams/pdf?link=<url_codificada>"
+```
+
+## Variables de entorno
+
+Crear o mantener `.env` en la raiz:
+
+```bash
+PORT=3000
+SYSLAB_BASE_URL=http://10.4.69.90/syslab/
+SYSLAB_USER=<usuario_syslab>
+SYSLAB_PASS=<clave_syslab>
+```
+
+## Ejecucion local
+
+```bash
+cd "/Users/daniel/Documents/scraper LAB"
+node server.js
+```
+
+El servicio queda disponible en:
+
+```text
+http://localhost:3000
+```
+
+## Uso con HHR local
+
+HHR debe tener:
+
+```bash
+VITE_SYSLAB_API_URL=http://localhost:3000
+VITE_SYSLAB_ENABLE_DIRECT_LOCAL=true
+```
+
+Levantar HHR en otro puerto, por ejemplo:
+
+```bash
+cd "/Users/daniel/Documents/HHR 2026 tracker version MacBookAir"
+VITE_SYSLAB_ENABLE_DIRECT_LOCAL=true npm run dev -- --host 0.0.0.0 --port 3020
+```
+
+## Uso con HHR desplegado en Netlify
+
+Netlify no puede acceder al `localhost` del Mac ni directamente a `10.4.69.90`. Para que Lab funcione en produccion:
+
+1. Este scraper debe estar corriendo en el Mac local (`localhost:3000`).
+2. El Mac debe tener acceso real a `http://10.4.69.90/syslab/`.
+3. Debe existir un tunel publico hacia `localhost:3000`.
+4. Netlify debe tener `SYSLAB_PROXY_URL` apuntando a ese tunel.
+
+Ejemplo:
+
+```bash
+npm run tunnel:ngrok
+```
+
+Verificar:
+
+```bash
+curl "https://hyperkalemic-transthoracic-lecia.ngrok-free.dev/health"
+```
+
+Si el tunel esta offline, Netlify devolvera `503` en `/.netlify/functions/syslab-proxy?action=health` y el boton Lab aparecera deshabilitado.
+
+## Diagnostico rapido
+
+```bash
+npm run check:syslab
+curl "http://localhost:3000/health"
+curl -I --max-time 5 "http://10.4.69.90/syslab/"
+curl "https://<SYSLAB_PROXY_URL>/health"
+```
+
+Interpretacion:
+
+- Falla `localhost:3000/health`: el scraper no esta corriendo.
+- Falla `10.4.69.90/syslab`: no hay acceso real a Syslab.
+- Falla `SYSLAB_PROXY_URL/health`: el tunel esta apagado, mal apuntado o caducado.
+
+`npm run check:syslab` resume el estado del scraper local y del tunel publico en una sola salida. Tambien muestra el acceso directo a Syslab como advertencia orientativa, porque el flujo real usa Playwright y puede comportarse distinto a `curl`.
+
+## Logs
+
+- `logs/combined.log`: eventos generales.
+- `logs/error.log`: fallos de navegacion, login o scraping.
+- `logs/debug_post_aceptar_*.html`: HTML capturado despues de buscar RUT.
+- `logs/raw_extract_*.txt`: texto crudo extraido desde PDFs.
+- `logs/login_error_*.png`: capturas de error de login.
+
+## Tests
+
+```bash
+npm test
+```
+
+## Documentacion tecnica
+
+El documento detallado esta en:
+
+```text
+technical_data_access.md
+technical_data_access_actualizado_2026-05-06.pdf
+```
