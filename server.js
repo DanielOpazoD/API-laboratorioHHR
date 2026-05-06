@@ -18,6 +18,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Healthcheck (consumido por el Netlify proxy de HHR para habilitar el botón Lab)
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'syslab-scraper',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Rutas
 app.use('/api', apiRoutes);
 

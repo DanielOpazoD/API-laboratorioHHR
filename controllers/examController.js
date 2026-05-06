@@ -16,6 +16,23 @@ exports.getExams = async (req, res, next) => {
   }
 };
 
+exports.getExamPdf = async (req, res, next) => {
+  const { link } = req.query;
+  if (!link) {
+    return res.status(400).json({ success: false, error: 'Se requiere el parámetro link.' });
+  }
+
+  try {
+    logger.info(`API: Descargando PDF para link: ${link}`);
+    const buffer = await scraperOrchestrator.getExamPdf(link);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getExamsDetails = async (req, res, next) => {
   const { links } = req.body;
   
