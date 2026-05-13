@@ -51,6 +51,15 @@ const NON_ANALYTIC_ANALYSIS_PATTERNS = [
   /^Prevenci[oó]n\s+tromb\.\s+recidivante\s+y\s+tratamiento$/i,
   /^Profilaxis\s+arteriales\s+y\s+v[aá]lvulas\s+cardiacas$/i,
   /^Equipo\s+analizador$/i,
+  // Subgrupos demográficos usados como rangos de referencia (Ferritina, etc.)
+  /^Hombres?$/i,
+  /^Mujeres(\s+.+)?$/i,           // "Mujeres", "Mujeres cíclicas", "Mujeres menopaúsicas", etc.
+  /^Ni[ñn]os?(\s+.+)?$/i,         // "Niños", "Niños < 1 año", etc.
+  /^Ni[ñn]as?(\s+.+)?$/i,
+  /^Adultos?(\s+.+)?$/i,          // "Adultos", "Adultos mayores"
+  /^Embarazadas?(\s+.+)?$/i,
+  /^Reci[ée]n\s+nacidos?(\s+.+)?$/i,
+  /^Lactantes?(\s+.+)?$/i,
 ];
 
 const normalizeForMatch = value =>
