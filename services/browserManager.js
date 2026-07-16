@@ -10,7 +10,7 @@ const logger = require('../utils/logger');
 class BrowserManager {
   constructor() {
     this.logsDir = path.join(__dirname, '../logs');
-    if (!fs.existsSync(this.logsDir)) fs.mkdirSync(this.logsDir, { recursive: true });
+    if (config.debugArtifacts && !fs.existsSync(this.logsDir)) fs.mkdirSync(this.logsDir, { recursive: true });
   }
 
   async initBrowser(headless = true) {
@@ -42,7 +42,9 @@ class BrowserManager {
       }
     } catch (e) {
       logger.error(`Falla en Login: ${e.message}`);
-      await page.screenshot({ path: path.join(this.logsDir, `login_error_${Date.now()}.png`) });
+      if (config.debugArtifacts) {
+        await page.screenshot({ path: path.join(this.logsDir, `login_error_${Date.now()}.png`) });
+      }
       throw new Error(`Falla en Login: ${e.message}`);
     }
   }

@@ -3,6 +3,28 @@
  */
 const winston = require('winston');
 const path = require('path');
+const config = require('../config/env');
+
+const transports = [
+  new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.printf(info => `[${info.timestamp}] ${info.level}: ${info.message}`)
+    )
+  })
+];
+
+if (config.debugArtifacts) {
+  transports.push(
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/error.log'),
+      level: 'error'
+    }),
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/combined.log')
+    })
+  );
+}
 
 const logger = winston.createLogger({
   level: 'info',
@@ -10,21 +32,7 @@ const logger = winston.createLogger({
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.printf(info => `[${info.timestamp}] ${info.level.toUpperCase()}: ${info.message}`)
   ),
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(info => `[${info.timestamp}] ${info.level}: ${info.message}`)
-      )
-    }),
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/error.log'), 
-      level: 'error' 
-    }),
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/combined.log') 
-    })
-  ]
+  transports
 });
 
 module.exports = logger;

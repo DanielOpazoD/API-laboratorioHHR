@@ -44,7 +44,19 @@ describe('scraperOrchestrator exam list extraction', () => {
     expect(exams[0]).toMatchObject({
       date: '02/05/2026',
       time: '06:09:55',
+      rutBody: '10096004',
       exams: ['GASES VENOSOS.'],
     });
+    expect(scraperOrchestrator.examRowsMatchRut(exams, '10.096.004')).toBe(true);
+    expect(scraperOrchestrator.examRowsMatchRut(exams, '17752753')).toBe(false);
+  });
+
+  it('extracts the canonical RUN body from report text', () => {
+    expect(
+      scraperOrchestrator.extractRutBodyFromReportText(
+        'Nombre : Paciente de prueba\nRut/Fic : 10.096.004-4 / 12345\nFecha : 02/05/2026'
+      )
+    ).toBe('10096004');
+    expect(scraperOrchestrator.extractRutBodyFromReportText('Informe sin identificador')).toBe('');
   });
 });

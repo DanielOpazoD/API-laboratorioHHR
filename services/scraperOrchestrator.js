@@ -42,14 +42,30 @@ class ScraperOrchestrator {
       const date = dateParts[0] ? dateParts[0].trim() : tds[1].innerText.trim();
       const time = dateParts[1] ? dateParts[1].replace(/<[^>]+>/g, '').trim() : '';
       const patientName = tds[3].innerText.trim();
+      const rutMatch = tds[2].innerText.trim().match(/\d[\d.]*/);
+      const rutBody = rutMatch ? rutMatch[0].replace(/\D/g, '') : '';
       const origin = tds[4].innerText.trim();
       const examsTags = Array.from(tds[5].querySelectorAll('.mitabla tr td'));
       const examNames = examsTags
         .map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim())
         .filter(e => e !== '');
       const link = href ? new URL(href.trim(), document.baseURI || window.location.href).href : null;
-      return { id, link, date, time, patientName, origin, exams: examNames };
+      return { id, link, date, time, rutBody, patientName, origin, exams: examNames };
     }).filter(Boolean);
+  }
+
+  examRowsMatchRut(exams, expectedRutBody) {
+    const expected = String(expectedRutBody || '').replace(/\D/g, '');
+    return /^\d{5,9}$/.test(expected) && Array.isArray(exams) && exams.every(exam =>
+      exam && String(exam.rutBody || '').replace(/\D/g, '') === expected
+    );
+  }
+
+  extractRutBodyFromReportText(text) {
+    const line = String(text || '').split(/\r?\n/).find(value => /^\s*Rut\/?Fic\s*:/i.test(value));
+    if (!line) return '';
+    const match = line.replace(/^\s*Rut\/?Fic\s*:/i, '').match(/\d[\d.]*/);
+    return match ? match[0].replace(/\D/g, '') : '';
   }
 
   async getExamsList(rut) {
@@ -70,7 +86,7 @@ class ScraperOrchestrator {
 
       // Syslab exige RUT sin puntos, sin guion y sin dígito verificador
       const cleanRut = String(rut).replace(/\./g, '').replace(/-.*$/, '').replace(/\D/g, '');
-      logger.info(`Buscando RUT: ${rut} (normalizado: ${cleanRut})`);
+      logger.info('Consultando órdenes del RUN solicitado.');
       const rutInput = page.locator('input[name="rut"], input[type="text"]').first();
       await rutInput.waitFor({ state: 'visible', timeout: 10000 });
       await rutInput.fill(cleanRut);
@@ -79,8 +95,7 @@ class ScraperOrchestrator {
       await acceptBtn.click();
       await page.waitForLoadState('networkidle');
 
-      // === DIAGNÓSTICO: dumpear HTML y URL post-Aceptar para ver dónde caímos ===
-      try {
+      if (config.debugArtifacts) try {
         const fsd = require('fs');
         const pathd = require('path');
         const debugDir = pathd.join(__dirname, '../logs');
@@ -98,12 +113,16 @@ class ScraperOrchestrator {
       } catch (debugErr) {
         logger.warn(`[DEBUG] dump failed: ${debugErr.message}`);
       }
-      // === FIN DIAGNÓSTICO ===
-
       const exams = await page.evaluate(this.extractExamsFromDocument);
+      if (!this.examRowsMatchRut(exams, cleanRut)) {
+        throw new Error('Syslab devolvió órdenes que no corresponden al RUT consultado.');
+      }
 
-      const screenshot = await page.screenshot({ fullPage: true });
-      return { success: true, data: exams, screenshot: `data:image/png;base64,${screenshot.toString('base64')}` };
+      return {
+        success: true,
+        rutBody: cleanRut,
+        data: exams,
+      };
     } catch (e) {
       logger.error(`Error en getExamsList: ${e.message}`);
       throw e;
@@ -112,7 +131,25 @@ class ScraperOrchestrator {
     }
   }
 
-  async getExamPdf(link) {
+  async validateExamPdfRut(buffer, expectedRutBody) {
+    const expected = String(expectedRutBody || '').replace(/\D/g, '');
+    if (!/^\d{5,9}$/.test(expected) || !buffer || !buffer.length) {
+      throw new Error('No se pudo validar el RUN del informe solicitado.');
+    }
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const data = await parser.getText();
+      const reportRutBody = this.extractRutBodyFromReportText(data.text);
+      if (reportRutBody !== expected) {
+        throw new Error('El PDF no corresponde al RUN solicitado.');
+      }
+      return buffer;
+    } finally {
+      await parser.destroy();
+    }
+  }
+
+  async getExamPdf(link, expectedRutBody) {
     let browser, context, page;
     try {
       browser = await browserManager.initBrowser();
@@ -162,12 +199,12 @@ class ScraperOrchestrator {
       // Dar tiempo para que los listeners procesen respuestas tardías
       await page.waitForTimeout(2000);
 
-      if (capturedPdfBuffer) return capturedPdfBuffer;
+      if (capturedPdfBuffer) return await this.validateExamPdfRut(capturedPdfBuffer, expectedRutBody);
 
       if (downloadedPath) {
         const buffer = fs.readFileSync(downloadedPath);
         fs.unlinkSync(downloadedPath);
-        return buffer;
+        return await this.validateExamPdfRut(buffer, expectedRutBody);
       }
 
       // Estrategia 3: buscar iframe/embed con PDF dentro de la página cargada
@@ -189,15 +226,20 @@ class ScraperOrchestrator {
         logger.info(`PDF embebido detectado, navegando a: ${embeddedPdfUrl}`);
         await page.goto(embeddedPdfUrl, { timeout: 20000 }).catch(() => null);
         await page.waitForTimeout(2000);
-        if (capturedPdfBuffer) return capturedPdfBuffer;
+        if (capturedPdfBuffer) {
+          return await this.validateExamPdfRut(capturedPdfBuffer, expectedRutBody);
+        }
       }
 
       // Estrategia 4: última opción — renderizar HTML como PDF
       logger.warn('Ningún PDF nativo detectado; generando PDF desde el HTML renderizado');
       const pageTitle = await page.title().catch(() => 'unknown');
       const currentUrl = page.url();
-      logger.info(`Título página: "${pageTitle}" | URL actual: ${currentUrl}`);
-      return await page.pdf({ format: 'A4', printBackground: true });
+      if (config.debugArtifacts) {
+        logger.info(`Título página: "${pageTitle}" | URL actual: ${currentUrl}`);
+      }
+      const fallbackPdf = await page.pdf({ format: 'A4', printBackground: true });
+      return await this.validateExamPdfRut(fallbackPdf, expectedRutBody);
 
     } catch (e) {
       logger.error(`Error en getExamPdf: ${e.message}`);
@@ -207,8 +249,8 @@ class ScraperOrchestrator {
     }
   }
 
-  async processExamDetailLink(context, link, logsDir, index) {
-    logger.info(`Procesando link: ${link}`);
+  async processExamDetailLink(context, link, logsDir, index, expectedRutBody) {
+    logger.info(`Procesando informe ${index + 1}.`);
     const page = await context.newPage();
     let textContent = "";
 
@@ -252,26 +294,46 @@ class ScraperOrchestrator {
 
       if (pdfBuffer) {
         const parser = new PDFParse({ data: pdfBuffer });
-        const data = await parser.getText();
-        textContent = data.text;
+        try {
+          const data = await parser.getText();
+          textContent = data.text;
+        } finally {
+          await parser.destroy();
+        }
       } else {
         textContent = await page.innerText('body').catch(() => "");
       }
 
-      fs.writeFileSync(path.join(logsDir, `raw_extract_${Date.now()}_${index}.txt`), textContent);
+      const rutBody = this.extractRutBodyFromReportText(textContent);
+      if (!rutBody || rutBody !== expectedRutBody) {
+        throw new Error('El informe no corresponde al RUN solicitado.');
+      }
+      if (config.debugArtifacts) {
+        fs.writeFileSync(path.join(logsDir, `raw_extract_${Date.now()}_${index}.txt`), textContent);
+      }
       const findings = parseReportText(textContent);
-      return { url: link, findings };
+      return { url: link, rutBody, findings };
     } catch (e) {
-      logger.error(`Fallo en details ${link}: ${e.message}`);
-      return { url: link, findings: [], error: e.message };
+      logger.error(`Fallo al procesar el informe ${index + 1}.`);
+      if (config.debugArtifacts) logger.error(e.stack || e.message);
+      return {
+        url: link,
+        rutBody: '',
+        findings: [],
+        error: 'No se pudo validar este informe.',
+      };
     } finally {
       await page.close();
     }
   }
 
-  async getExamsDetails(links) {
+  async getExamsDetails(links, rutBody) {
     let browser, context, mainPage;
     try {
+      const expectedRutBody = String(rutBody || '').replace(/\D/g, '');
+      if (!/^\d{5,9}$/.test(expectedRutBody)) {
+        throw new Error('El cuerpo del RUN solicitado no es válido.');
+      }
       browser = await browserManager.initBrowser();
       context = await browser.newContext({ acceptDownloads: true });
       mainPage = await context.newPage();
@@ -285,10 +347,16 @@ class ScraperOrchestrator {
       const results = await this.mapWithConcurrency(
         links,
         DETAILS_CONCURRENCY,
-        (link, index) => this.processExamDetailLink(context, link, logsDir, index)
+        (link, index) => this.processExamDetailLink(
+          context,
+          link,
+          logsDir,
+          index,
+          expectedRutBody
+        )
       );
 
-      return { success: true, data: results };
+      return { success: true, rutBody: expectedRutBody, data: results };
     } catch (e) {
       logger.error(`Error en getExamsDetails: ${e.message}`);
       throw e;
