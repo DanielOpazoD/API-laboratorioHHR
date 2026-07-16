@@ -94,8 +94,10 @@ Flujo:
 4. Realiza login con `SYSLAB_USER` y `SYSLAB_PASS`.
 5. Navega a la busqueda por RUT.
 6. Normaliza el RUT a cuerpo numerico, sin puntos, guion ni digito verificador.
-7. Extrae filas de `table.narrow tr`.
-8. Devuelve ordenes con `id`, `link`, `date`, `time`, `patientName`, `origin` y lista de examenes.
+7. Extrae filas de `table.narrow tr` y valida que el RUN informado por cada fila coincida con la
+   consulta. Si alguna orden pertenece a otro RUN, la respuesta falla de forma completa.
+8. Devuelve `rutBody` en la respuesta y en cada orden, junto con `id`, `link`, `date`, `time`,
+   `patientName`, `origin` y la lista de examenes.
 
 Ejemplo:
 

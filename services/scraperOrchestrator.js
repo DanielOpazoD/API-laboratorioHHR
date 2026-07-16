@@ -42,14 +42,23 @@ class ScraperOrchestrator {
       const date = dateParts[0] ? dateParts[0].trim() : tds[1].innerText.trim();
       const time = dateParts[1] ? dateParts[1].replace(/<[^>]+>/g, '').trim() : '';
       const patientName = tds[3].innerText.trim();
+      const rutMatch = tds[2].innerText.trim().match(/\d[\d.]*/);
+      const rutBody = rutMatch ? rutMatch[0].replace(/\D/g, '') : '';
       const origin = tds[4].innerText.trim();
       const examsTags = Array.from(tds[5].querySelectorAll('.mitabla tr td'));
       const examNames = examsTags
         .map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim())
         .filter(e => e !== '');
       const link = href ? new URL(href.trim(), document.baseURI || window.location.href).href : null;
-      return { id, link, date, time, patientName, origin, exams: examNames };
+      return { id, link, date, time, rutBody, patientName, origin, exams: examNames };
     }).filter(Boolean);
+  }
+
+  examRowsMatchRut(exams, expectedRutBody) {
+    const expected = String(expectedRutBody || '').replace(/\D/g, '');
+    return /^\d{5,9}$/.test(expected) && Array.isArray(exams) && exams.every(exam =>
+      exam && String(exam.rutBody || '').replace(/\D/g, '') === expected
+    );
   }
 
   async getExamsList(rut) {
@@ -101,9 +110,17 @@ class ScraperOrchestrator {
       // === FIN DIAGNÓSTICO ===
 
       const exams = await page.evaluate(this.extractExamsFromDocument);
+      if (!this.examRowsMatchRut(exams, cleanRut)) {
+        throw new Error('Syslab devolvió órdenes que no corresponden al RUT consultado.');
+      }
 
       const screenshot = await page.screenshot({ fullPage: true });
-      return { success: true, data: exams, screenshot: `data:image/png;base64,${screenshot.toString('base64')}` };
+      return {
+        success: true,
+        rutBody: cleanRut,
+        data: exams,
+        screenshot: `data:image/png;base64,${screenshot.toString('base64')}`,
+      };
     } catch (e) {
       logger.error(`Error en getExamsList: ${e.message}`);
       throw e;
