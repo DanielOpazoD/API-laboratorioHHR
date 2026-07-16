@@ -113,6 +113,7 @@ Entrada:
 
 ```json
 {
+  "rutBody": "10096004",
   "links": [
     "http://10.4.69.90/syslab/detalleexamenes.php?id=43092478&user=..."
   ]
@@ -125,9 +126,10 @@ Flujo:
 2. Procesa links con concurrencia controlada.
 3. Captura PDF mediante listeners de red, evento de descarga o links embebidos.
 4. Si no encuentra PDF nativo, genera un PDF desde el HTML renderizado como ultimo fallback.
-5. Extrae texto con `pdf-parse`.
-6. Guarda texto crudo en `logs/raw_extract_*.txt`.
-7. Parsea variables con `utils/reportParser.js`.
+5. Extrae texto con `pdf-parse` y comprueba que `Rut/Fic` coincida con `rutBody`.
+6. Si un informe no confirma el RUN, lo devuelve como error y el visor cancela el lote completo.
+7. Guarda texto crudo en `logs/raw_extract_*.txt`.
+8. Parsea variables con `utils/reportParser.js`.
 
 ### `GET /api/exams/pdf?link=<url>`
 

@@ -34,15 +34,18 @@ exports.getExamPdf = async (req, res, next) => {
 };
 
 exports.getExamsDetails = async (req, res, next) => {
-  const { links } = req.body;
+  const { links, rutBody } = req.body;
   
-  if (!links || !Array.isArray(links)) {
-    return res.status(400).json({ success: false, error: 'Se requiere una lista de enlaces para obtener detalles.' });
+  if (!links || !Array.isArray(links) || !/^\d{5,9}$/.test(String(rutBody || ''))) {
+    return res.status(400).json({
+      success: false,
+      error: 'Se requiere una lista de enlaces y el cuerpo del RUN para obtener detalles.',
+    });
   }
 
   try {
     logger.info(`API: Obteniendo detalles para ${links.length} órdenes.`);
-    const result = await scraperOrchestrator.getExamsDetails(links);
+    const result = await scraperOrchestrator.getExamsDetails(links, rutBody);
     res.json(result);
   } catch (error) {
     next(error);

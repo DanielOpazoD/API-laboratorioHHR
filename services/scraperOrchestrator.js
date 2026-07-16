@@ -61,6 +61,13 @@ class ScraperOrchestrator {
     );
   }
 
+  extractRutBodyFromReportText(text) {
+    const line = String(text || '').split(/\r?\n/).find(value => /^\s*Rut\/?Fic\s*:/i.test(value));
+    if (!line) return '';
+    const match = line.replace(/^\s*Rut\/?Fic\s*:/i, '').match(/\d[\d.]*/);
+    return match ? match[0].replace(/\D/g, '') : '';
+  }
+
   async getExamsList(rut) {
     let browser, context, page;
     try {
@@ -224,7 +231,7 @@ class ScraperOrchestrator {
     }
   }
 
-  async processExamDetailLink(context, link, logsDir, index) {
+  async processExamDetailLink(context, link, logsDir, index, expectedRutBody) {
     logger.info(`Procesando link: ${link}`);
     const page = await context.newPage();
     let textContent = "";
@@ -275,20 +282,28 @@ class ScraperOrchestrator {
         textContent = await page.innerText('body').catch(() => "");
       }
 
+      const rutBody = this.extractRutBodyFromReportText(textContent);
+      if (!rutBody || rutBody !== expectedRutBody) {
+        throw new Error('El informe no corresponde al RUN solicitado.');
+      }
       fs.writeFileSync(path.join(logsDir, `raw_extract_${Date.now()}_${index}.txt`), textContent);
       const findings = parseReportText(textContent);
-      return { url: link, findings };
+      return { url: link, rutBody, findings };
     } catch (e) {
       logger.error(`Fallo en details ${link}: ${e.message}`);
-      return { url: link, findings: [], error: e.message };
+      return { url: link, rutBody: '', findings: [], error: e.message };
     } finally {
       await page.close();
     }
   }
 
-  async getExamsDetails(links) {
+  async getExamsDetails(links, rutBody) {
     let browser, context, mainPage;
     try {
+      const expectedRutBody = String(rutBody || '').replace(/\D/g, '');
+      if (!/^\d{5,9}$/.test(expectedRutBody)) {
+        throw new Error('El cuerpo del RUN solicitado no es válido.');
+      }
       browser = await browserManager.initBrowser();
       context = await browser.newContext({ acceptDownloads: true });
       mainPage = await context.newPage();
@@ -302,10 +317,16 @@ class ScraperOrchestrator {
       const results = await this.mapWithConcurrency(
         links,
         DETAILS_CONCURRENCY,
-        (link, index) => this.processExamDetailLink(context, link, logsDir, index)
+        (link, index) => this.processExamDetailLink(
+          context,
+          link,
+          logsDir,
+          index,
+          expectedRutBody
+        )
       );
 
-      return { success: true, data: results };
+      return { success: true, rutBody: expectedRutBody, data: results };
     } catch (e) {
       logger.error(`Error en getExamsDetails: ${e.message}`);
       throw e;
