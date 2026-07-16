@@ -10,14 +10,14 @@ router.get('/exams', examController.getExams);
 
 /**
  * GET /api/exams/pdf
- * Query params: link
+ * Query params: batchId, examId
  * Returns: raw PDF bytes (application/pdf)
  */
 router.get('/exams/pdf', examController.getExamPdf);
 
 /**
  * POST /api/exams/details
- * Body: { links: string[] }
+ * Body: { batchId: string, examIds: string[] }
  */
 router.post('/exams/details', examController.getExamsDetails);
 
