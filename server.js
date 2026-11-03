@@ -1,52 +1,52 @@
 const express = require('express');
-const path = require('path');
+const { timingSafeEqual } = require('node:crypto');
 const config = require('./config/env');
 const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
-const cors = require('cors');
 
-const app = express();
-
-// Middlewares
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Interceptar peticiones para Logging
-app.use((req, res, next) => {
-  logger.info(`[REQ] ${req.method} ${req.url}`);
-  next();
-});
-
-// Healthcheck (consumido por el Netlify proxy de HHR para habilitar el botón Lab)
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'syslab-scraper',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
+const createApp = () => {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
   });
-});
-
-// Rutas
-app.use('/api', apiRoutes);
-
-// Manejo de errores global centralizado
-app.use((err, req, res, next) => {
-  logger.error(`Error no manejado: ${err.stack || err.message}`);
-  res.status(500).json({
-    success: false,
-    error: '¡Error interno al procesar el scraping!',
-    details: err.message
+  app.use((req, res, next) => {
+    if (config.apiToken.length < 32) return res.status(503).json({ success: false, error: 'Servicio sin configurar.' });
+    const expected = Buffer.from('Bearer ' + config.apiToken);
+    const supplied = Buffer.from(req.get('authorization') || '');
+    if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      return res.status(401).json({ success: false, error: 'Autenticación requerida.' });
+    }
+    next();
   });
-});
+  app.use(express.json({ limit: '32kb' }));
+  app.get('/health', async (_req, res) => {
+    try {
+      const scraper = require('./services/scraperOrchestrator');
+      await scraper.withAuthenticatedContext(async () => {});
+      res.json({ success: true, connected: true, service: 'syslab-scraper', version: '2.0.0' });
+    } catch {
+      res.status(503).json({ success: false, connected: false, error: 'No se pudo iniciar sesión en Syslab desde el Mac mini.' });
+    }
+  });
+  app.use('/api', apiRoutes);
+  app.use((err, _req, res, _next) => {
+    logger.warn('No se pudo completar una solicitud de laboratorio.');
+    res.status(err.status === 413 ? 413 : 502).json({
+      success: false,
+      error: 'No se pudo completar la consulta. Comprueba la conexión del Mac mini y actualiza la búsqueda.'
+    });
+  });
+  return app;
+};
 
-app.listen(config.port, () => {
-  logger.info(`
-  🚀 Aplicación Syslab 2.0 refactorizada
-  --------------------------------------
-  Local:   http://localhost:${config.port}
-  API:     http://localhost:${config.port}/api/exams?rut=...
-  --------------------------------------
-  `);
-});
+if (require.main === module) {
+  if (config.apiToken.length < 32 || !config.syslab.user || !config.syslab.pass) {
+    console.error('Configura SYSLAB_API_TOKEN (mínimo 32 caracteres), SYSLAB_USER y SYSLAB_PASS en .env.');
+    process.exitCode = 1;
+  } else {
+    createApp().listen(config.port, config.host, () => logger.info('Servidor Syslab disponible en loopback.'));
+  }
+}
+module.exports = { createApp };

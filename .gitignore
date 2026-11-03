@@ -3,7 +3,6 @@ logs/
 downloads/
 .DS_Store
 .env
-package-lock.json
 *.png
 *.txt
 debug_*.txt

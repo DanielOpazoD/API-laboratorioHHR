@@ -21,16 +21,16 @@ describe('scraperOrchestrator exam list extraction', () => {
         <tr class="">
           <td><a href="detalleexamenes.php?id=43092446&user=abc">43092446</a></td>
           <td>02/05/2026<br>06:09:55</td>
-          <td>10096004 4</td>
-          <td>TATARATA ,LUCIE TITAUA</td>
+          <td>11111111 4</td>
+          <td>PACIENTE ,SINTETICO</td>
           <td>HOSPITALIZADO</td>
           <td><table class="mitabla"><tr><td>GASES VENOSOS.(V)</td></tr></table></td>
         </tr>
         <tr class="odd">
           <td><a href="detalleexamenes.php?id=43092427&user=abc">43092427</a></td>
           <td>30/04/2026<br>15:28:51</td>
-          <td>10096004 4</td>
-          <td>TATARATA ,LUCIE TITAUA</td>
+          <td>11111111 4</td>
+          <td>PACIENTE ,SINTETICO</td>
           <td>HOSPITALIZADO</td>
           <td><table class="mitabla"><tr><td>PCR PANEL RESPIRATORIO #2.(V)</td></tr></table></td>
         </tr>
