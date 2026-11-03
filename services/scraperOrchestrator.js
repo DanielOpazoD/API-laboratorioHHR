@@ -3,8 +3,7 @@ const { parseReportText } = require('../utils/reportParser');
 const logger = require('../utils/logger');
 const config = require('../config/env');
 const { PDFParse } = require('pdf-parse');
-const path = require('path');
-const fs = require('fs');
+const { issueReportLink, readReportLink, isAllowedResource, assertReportPatient } = require('./reportAccess');
 
 const DETAILS_CONCURRENCY = 3;
 
@@ -48,7 +47,8 @@ class ScraperOrchestrator {
         .map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim())
         .filter(e => e !== '');
       const link = href ? new URL(href.trim(), document.baseURI || window.location.href).href : null;
-      return { id, link, date, time, patientName, origin, exams: examNames };
+      const rutBody = (tds[2].innerText.match(/\d[\d.]*/) || [''])[0].replace(/\D/g, '');
+      return { id, link, rutBody, date, time, patientName, origin, exams: examNames };
     }).filter(Boolean);
   }
 
@@ -57,6 +57,7 @@ class ScraperOrchestrator {
     try {
       browser = await browserManager.initBrowser();
       context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+      await browserManager.configureContext(context);
       page = await context.newPage();
       
       await page.goto(config.syslab.baseUrl, { waitUntil: 'networkidle' });
@@ -70,231 +71,97 @@ class ScraperOrchestrator {
 
       // Syslab exige RUT sin puntos, sin guion y sin dígito verificador
       const cleanRut = String(rut).replace(/\./g, '').replace(/-.*$/, '').replace(/\D/g, '');
-      logger.info(`Buscando RUT: ${rut} (normalizado: ${cleanRut})`);
+      if (!/^\d{5,9}$/.test(cleanRut)) throw new Error('El RUN de búsqueda no es válido.');
       const rutInput = page.locator('input[name="rut"], input[type="text"]').first();
       await rutInput.waitFor({ state: 'visible', timeout: 10000 });
       await rutInput.fill(cleanRut);
       
-      const acceptBtn = page.locator('input[value*="Aceptar"], button:has-text("Aceptar")').first();
+      const acceptBtn = page.locator('input[value*="Aceptar"], button:has-text("Aceptar"), input[value*="Buscar"], button:has-text("Buscar"), input[type="submit"]').first();
       await acceptBtn.click();
       await page.waitForLoadState('networkidle');
 
-      // === DIAGNÓSTICO: dumpear HTML y URL post-Aceptar para ver dónde caímos ===
-      try {
-        const fsd = require('fs');
-        const pathd = require('path');
-        const debugDir = pathd.join(__dirname, '../logs');
-        if (!fsd.existsSync(debugDir)) fsd.mkdirSync(debugDir, { recursive: true });
-        const ts = Date.now();
-        const html = await page.content();
-        fsd.writeFileSync(pathd.join(debugDir, `debug_post_aceptar_${ts}.html`), html);
-        logger.info(`[DEBUG] post-Aceptar URL=${page.url()} | title="${await page.title()}" | htmlLen=${html.length}`);
-        const frames = page.frames();
-        logger.info(`[DEBUG] frames: ${frames.length} -> ${frames.map(f=>f.url()).join(' | ')}`);
-        const buttons = await page.$$eval('input[type=submit], input[type=button], button, a', els =>
-          els.map(e => ({ tag: e.tagName, value: e.value || e.innerText || '', href: e.href || '', name: e.name || '' })).filter(x => x.value || x.href)
-        ).catch(() => []);
-        logger.info(`[DEBUG] clickables on page: ${JSON.stringify(buttons).slice(0,1500)}`);
-      } catch (debugErr) {
-        logger.warn(`[DEBUG] dump failed: ${debugErr.message}`);
-      }
-      // === FIN DIAGNÓSTICO ===
-
+      if (!(await page.locator('table.narrow').count())) throw new Error('Syslab no confirmó una respuesta de búsqueda válida.');
       const exams = await page.evaluate(this.extractExamsFromDocument);
 
-      const screenshot = await page.screenshot({ fullPage: true });
-      return { success: true, data: exams, screenshot: `data:image/png;base64,${screenshot.toString('base64')}` };
+      if (exams.some(exam => exam.rutBody !== cleanRut)) throw new Error('Syslab devolvió órdenes de otro paciente.');
+      return { success: true, data: exams.map(({ rutBody, ...exam }) => ({ ...exam, link: issueReportLink(exam.link, cleanRut) })) };
     } catch (e) {
-      logger.error(`Error en getExamsList: ${e.message}`);
+      logger.warn('No se pudo completar la búsqueda de laboratorio.');
       throw e;
     } finally {
       if (browser) await browser.close();
     }
   }
 
-  async getExamPdf(link) {
-    let browser, context, page;
-    try {
-      browser = await browserManager.initBrowser();
-      context = await browser.newContext({ acceptDownloads: true });
-      const loginPage = await context.newPage();
-      await loginPage.goto(config.syslab.baseUrl, { waitUntil: 'networkidle' });
-      await browserManager.login(loginPage);
-      await loginPage.close();
-
-      page = await context.newPage();
-
-      // Estrategia 1: listener que lee el body apenas llega una respuesta PDF
-      let capturedPdfBuffer = null;
-      page.on('response', async (response) => {
-        if (capturedPdfBuffer) return;
-        const ct = (response.headers()['content-type'] || '').toLowerCase();
-        if (!ct.includes('pdf')) return;
+  async readValidatedPdf(context, reference) {
+    const { link, rutBody } = readReportLink(reference);
+    let url = link;
+    let bytes;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (!isAllowedResource(url)) throw new Error('Ruta de informe no permitida.');
+      const response = await context.request.get(url, { maxRedirects: 0, timeout: 20_000 });
+      try {
+        if (response.status() >= 300 && response.status() < 400) {
+          url = new URL(response.headers().location, url).href;
+          continue;
+        }
+        if (!response.ok()) throw new Error('Syslab no pudo entregar el informe.');
+        const body = await response.body();
+        if (!body.length || body.length > 4 * 1024 * 1024) throw new Error('El informe está vacío o supera 4 MB.');
+        if (body.subarray(0, 4).toString() === '%PDF') { bytes = body; break; }
+        const page = await context.newPage();
         try {
-          const body = await response.body();
-          if (body && body.length > 0) {
-            capturedPdfBuffer = body;
-            logger.info(`PDF capturado vía response listener: ${response.url()} (${body.length} bytes)`);
-          }
-        } catch (e) {
-          logger.warn(`No se pudo leer body de ${response.url()}: ${e.message}`);
-        }
-      });
-
-      // Estrategia 2: listener para descarga nativa
-      let downloadedPath = null;
-      page.on('download', async (download) => {
-        try {
-          const tmpPath = path.join(__dirname, '../downloads', `pdf_${Date.now()}.pdf`);
-          await download.saveAs(tmpPath);
-          downloadedPath = tmpPath;
-          logger.info(`PDF descargado vía download event: ${tmpPath}`);
-        } catch (e) {
-          logger.warn(`No se pudo guardar download: ${e.message}`);
-        }
-      });
-
-      // Navegar al link
-      await page.goto(link, { waitUntil: 'networkidle', timeout: 30000 }).catch(e => {
-        logger.warn(`goto no completó networkidle: ${e.message}`);
-      });
-
-      // Dar tiempo para que los listeners procesen respuestas tardías
-      await page.waitForTimeout(2000);
-
-      if (capturedPdfBuffer) return capturedPdfBuffer;
-
-      if (downloadedPath) {
-        const buffer = fs.readFileSync(downloadedPath);
-        fs.unlinkSync(downloadedPath);
-        return buffer;
-      }
-
-      // Estrategia 3: buscar iframe/embed con PDF dentro de la página cargada
-      const embeddedPdfUrl = await page.evaluate(() => {
-        const candidates = [
-          ...document.querySelectorAll('iframe[src]'),
-          ...document.querySelectorAll('embed[src]'),
-          ...document.querySelectorAll('object[data]'),
-          ...document.querySelectorAll('a[href*=".pdf"]'),
-        ];
-        for (const el of candidates) {
-          const url = el.src || el.data || el.href;
-          if (url && url.toLowerCase().includes('pdf')) return url;
-        }
-        return null;
-      }).catch(() => null);
-
-      if (embeddedPdfUrl) {
-        logger.info(`PDF embebido detectado, navegando a: ${embeddedPdfUrl}`);
-        await page.goto(embeddedPdfUrl, { timeout: 20000 }).catch(() => null);
-        await page.waitForTimeout(2000);
-        if (capturedPdfBuffer) return capturedPdfBuffer;
-      }
-
-      // Estrategia 4: última opción — renderizar HTML como PDF
-      logger.warn('Ningún PDF nativo detectado; generando PDF desde el HTML renderizado');
-      const pageTitle = await page.title().catch(() => 'unknown');
-      const currentUrl = page.url();
-      logger.info(`Título página: "${pageTitle}" | URL actual: ${currentUrl}`);
-      return await page.pdf({ format: 'A4', printBackground: true });
-
-    } catch (e) {
-      logger.error(`Error en getExamPdf: ${e.message}`);
-      throw e;
-    } finally {
-      if (browser) await browser.close();
+          const nested = await page.evaluate(html => {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            if (doc.querySelector('input[type="password"]')) return null;
+            const element = doc.querySelector('iframe[src], embed[src], object[data], a[href*=".pdf"]');
+            return element && (element.getAttribute('src') || element.getAttribute('data') || element.getAttribute('href'));
+          }, body.toString('utf8'));
+          if (!nested) throw new Error('Syslab no entregó un PDF verificable. Puede requerir iniciar sesión.');
+          url = new URL(nested, url).href;
+        } finally { await page.close(); }
+      } finally { await response.dispose(); }
     }
+    if (!bytes) throw new Error('No se pudo obtener el PDF original de Syslab.');
+    const parser = new PDFParse({ data: bytes });
+    let text;
+    try { text = (await parser.getText()).text; }
+    finally { await parser.destroy(); }
+    assertReportPatient(text, rutBody);
+    return { bytes, text };
   }
 
-  async processExamDetailLink(context, link, logsDir, index) {
-    logger.info(`Procesando link: ${link}`);
-    const page = await context.newPage();
-    let textContent = "";
-
+  async withAuthenticatedContext(operation) {
+    const browser = await browserManager.initBrowser();
     try {
-      let capturedPdfBuffer = null;
-      page.on('response', async (response) => {
-        if (capturedPdfBuffer) return;
-        const ct = (response.headers()['content-type'] || '').toLowerCase();
-        if (!ct.includes('pdf')) return;
-        try {
-          const body = await response.body();
-          if (body && body.length > 0) {
-            capturedPdfBuffer = body;
-            logger.info(`PDF capturado (details) vía response: ${response.url()} (${body.length} bytes)`);
-          }
-        } catch (e) {
-          logger.warn(`No se pudo leer body (details): ${e.message}`);
-        }
-      });
-
-      let downloadedPath = null;
-      page.on('download', async (download) => {
-        try {
-          const tmpPath = path.join(__dirname, '../downloads', `details_${Date.now()}_${index}.pdf`);
-          await download.saveAs(tmpPath);
-          downloadedPath = tmpPath;
-          logger.info(`PDF descargado (details) vía download: ${tmpPath}`);
-        } catch (e) {
-          logger.warn(`No se pudo guardar download (details): ${e.message}`);
-        }
-      });
-
-      await page.goto(link, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => null);
-      await page.waitForTimeout(2500);
-
-      let pdfBuffer = capturedPdfBuffer;
-      if (!pdfBuffer && downloadedPath) {
-        pdfBuffer = fs.readFileSync(downloadedPath);
-        fs.unlinkSync(downloadedPath);
-      }
-
-      if (pdfBuffer) {
-        const parser = new PDFParse({ data: pdfBuffer });
-        const data = await parser.getText();
-        textContent = data.text;
-      } else {
-        textContent = await page.innerText('body').catch(() => "");
-      }
-
-      fs.writeFileSync(path.join(logsDir, `raw_extract_${Date.now()}_${index}.txt`), textContent);
-      const findings = parseReportText(textContent);
-      return { url: link, findings };
-    } catch (e) {
-      logger.error(`Fallo en details ${link}: ${e.message}`);
-      return { url: link, findings: [], error: e.message };
-    } finally {
+      const context = await browser.newContext();
+      await browserManager.configureContext(context);
+      const page = await context.newPage();
+      await page.goto(config.syslab.baseUrl, { waitUntil: 'networkidle' });
+      await browserManager.login(page);
       await page.close();
-    }
+      return await operation(context);
+    } finally { await browser.close(); }
+  }
+
+  async getExamPdf(reference) {
+    readReportLink(reference);
+    return this.withAuthenticatedContext(async context => (await this.readValidatedPdf(context, reference)).bytes);
   }
 
   async getExamsDetails(links) {
-    let browser, context, mainPage;
-    try {
-      browser = await browserManager.initBrowser();
-      context = await browser.newContext({ acceptDownloads: true });
-      mainPage = await context.newPage();
-      
-      await mainPage.goto(config.syslab.baseUrl, { waitUntil: 'networkidle' });
-      await browserManager.login(mainPage);
-      await mainPage.close();
-
-      const logsDir = path.join(__dirname, '../logs');
-
-      const results = await this.mapWithConcurrency(
-        links,
-        DETAILS_CONCURRENCY,
-        (link, index) => this.processExamDetailLink(context, link, logsDir, index)
-      );
-
-      return { success: true, data: results };
-    } catch (e) {
-      logger.error(`Error en getExamsDetails: ${e.message}`);
-      throw e;
-    } finally {
-      if (browser) await browser.close();
+    if (!Array.isArray(links) || !links.length || links.length > 3) throw new Error('Se admiten entre 1 y 3 informes por solicitud.');
+    const references = links.map(readReportLink);
+    if (new Set(references.map(ref => ref.rutBody)).size !== 1 || new Set(links).size !== links.length) {
+      throw new Error('La selección mezcla pacientes o informes repetidos.');
     }
+    return this.withAuthenticatedContext(async context => {
+      const data = await this.mapWithConcurrency(links, DETAILS_CONCURRENCY, async url => {
+        const { text } = await this.readValidatedPdf(context, url);
+        return { url, findings: parseReportText(text) };
+      });
+      return { success: true, data };
+    });
   }
 }
 

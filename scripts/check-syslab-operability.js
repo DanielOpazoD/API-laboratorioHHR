@@ -1,6 +1,6 @@
 const config = require('../config/env');
 
-const DEFAULT_PUBLIC_PROXY_URL = 'https://hyperkalemic-transthoracic-lecia.ngrok-free.dev';
+
 
 const timeoutSignal = timeoutMs => {
   const controller = new AbortController();
@@ -17,6 +17,7 @@ const checkUrl = async (label, url, options = {}) => {
     const response = await fetch(url, {
       method: options.method || 'GET',
       signal,
+      redirect: 'error',
       headers: {
         'ngrok-skip-browser-warning': 'true',
         ...(options.headers || {}),
@@ -44,19 +45,19 @@ const checkUrl = async (label, url, options = {}) => {
 
 const main = async () => {
   const port = process.env.PORT || config.port || 3000;
-  const publicProxyUrl = (process.env.SYSLAB_PROXY_URL || DEFAULT_PUBLIC_PROXY_URL).replace(
+  const publicProxyUrl = (process.env.SYSLAB_PROXY_URL || '').replace(
     /\/+$/,
     ''
   );
   const syslabBaseUrl = config.syslab.baseUrl.replace(/\/+$/, '/');
 
   const checks = await Promise.all([
-    checkUrl('scraper-local-health', `http://localhost:${port}/health`),
+    checkUrl('scraper-local-health', `http://127.0.0.1:${port}/health`, { timeoutMs: 50_000, headers: { Authorization: 'Bearer ' + config.apiToken } }),
     checkUrl('syslab-interno-directo-orientativo', syslabBaseUrl, {
       required: false,
       timeoutMs: 3_000,
     }),
-    checkUrl('tunel-publico-health', `${publicProxyUrl}/health`),
+    ...(publicProxyUrl ? [checkUrl('tunel-publico-health', `${publicProxyUrl}/health`, { timeoutMs: 50_000, headers: { Authorization: 'Bearer ' + config.apiToken } })] : []),
   ]);
 
   console.log('Syslab Scraper operability check');

@@ -1,168 +1,124 @@
-# Syslab Scraper & Microservicio de Integracion HHR
+# Puente de laboratorio Syslab para HHR
 
-Microservicio local en Node.js, Express y Playwright para consultar examenes de laboratorio desde el portal interno Syslab del Hospital Hanga Roa (`http://10.4.69.90/syslab/`).
+Servidor local Node.js/Express/Playwright. Se instala en el Mac mini que puede acceder a
+Syslab y a Internet. HHR en Netlify autentica al profesional con Firebase y consulta este
+servidor por un túnel HTTPS. No requiere Google Cloud ni abrir puertos en el router.
 
-Este servicio existe porque Syslab no expone una API publica consumible por HHR. El scraper automatiza Chromium con Playwright, navega como usuario autenticado, extrae ordenes de laboratorio y captura PDFs para transformarlos en datos estructurados.
+## Contrato con HHR actual
 
-## Funcion principal
+Todas las rutas exigen `Authorization: Bearer <SYSLAB_API_TOKEN>`. El servidor escucha por
+defecto en `127.0.0.1:3100`. No expone la interfaz web anterior sin autenticación.
 
-```text
-HHR -> Syslab Scraper -> Portal Syslab -> JSON/PDF -> HHR
+- `GET /health`: inicia sesión en Syslab; `connected:true` acredita esa sesión, no solo un proceso encendido.
+- `GET /api/exams?rut=<cuerpo RUN>`: devuelve `{success,data}` con órdenes y referencias cifradas.
+- `POST /api/exams/details`, JSON `{links:[...]}`: entre 1 y 3 informes de un mismo paciente.
+- `GET /api/exams/pdf?link=<referencia>`: PDF original validado, máximo 4 MiB.
+
+Las referencias `hhr-syslab-remote://report/...` vencen a los 30 minutos y contienen de
+forma cifrada la ruta y el RUN consultado. No se aceptan URLs arbitrarias de informes.
+Cada encabezado `Rut/Fic` del PDF debe coincidir con el paciente; un informe ausente,
+fallido o de otro paciente nunca se convierte en un resultado vacío exitoso. Se conserva
+el esquema `findings` del visor. Una búsqueda vieja debe repetirse después de actualizar.
+
+HHR agrupa el análisis en lotes de tres y conserva sus controles de propietario,
+cancelación, progreso e integridad. La extensión local sigue siendo la ruta predeterminada.
+El modo remoto se activa expresamente con `VITE_SYSLAB_TRANSPORT=remote` en HHR.
+
+## Instalación mañana en el Mac mini
+
+Requisitos: Node.js 22 o posterior, Git y ngrok instalado/autenticado con tu cuenta.
+Primero comprueba que el Mac abre Syslab en la LAN. Usa una carpeta estable (no temporal):
+
+```sh
+git clone https://github.com/DanielOpazoD/API-laboratorioHHR.git "$HOME/HHR-laboratorio"
+cd "$HOME/HHR-laboratorio"
+npm ci
+npx playwright install chromium
+npm run configure:mac
 ```
 
-En local, HHR llama directamente a:
+El configurador pide en la terminal usuario y contraseña de Syslab, la clave compartida
+preparada en Netlify y el dominio HTTPS de tu túnel. Las claves no se muestran ni se
+incluyen en argumentos de procesos. El configurador conserva los caracteres exactos mediante
+valores BASE64 (codificación, no cifrado); guarda `.env` local con permisos 600. No lo subas a
+GitHub ni pegues secretos en el chat. No existen credenciales predeterminadas: las que
+aparecían en revisiones antiguas del repositorio público deben cambiarse si siguen vigentes.
+Eliminar el valor de la versión actual no lo elimina del historial de Git.
 
-```text
-http://localhost:3000
+Prueba manual en dos terminales:
+
+```sh
+npm start
 ```
 
-En Netlify, HHR llama a una Function serverless (`syslab-proxy`) que a su vez llama a una URL publica configurada como `SYSLAB_PROXY_URL`. Esa URL debe ser un tunel activo hacia este scraper local.
-
-## Endpoints disponibles
-
-### `GET /health`
-
-Comprueba que el microservicio esta encendido.
-
-```bash
-curl "http://localhost:3000/health"
-```
-
-### `GET /api/exams?rut=<rut>`
-
-Busca ordenes de laboratorio por RUT.
-
-```bash
-curl "http://localhost:3000/api/exams?rut=10096004"
-```
-
-Devuelve una lista de ordenes con:
-
-- `id`
-- `link`
-- `date`
-- `time`
-- `patientName`
-- `origin`
-- `exams`
-
-### `POST /api/exams/details`
-
-Recibe links de ordenes y devuelve resultados estructurados extraidos desde PDFs.
-
-```bash
-curl -X POST "http://localhost:3000/api/exams/details" \
-  -H "Content-Type: application/json" \
-  -d '{"links":["http://10.4.69.90/syslab/detalleexamenes.php?id=..."]}'
-```
-
-### `GET /api/exams/pdf?link=<url>`
-
-Devuelve el PDF de una orden para visualizacion inline.
-
-```bash
-curl "http://localhost:3000/api/exams/pdf?link=<url_codificada>"
-```
-
-## Variables de entorno
-
-Crear o mantener `.env` en la raiz:
-
-```bash
-PORT=3000
-SYSLAB_BASE_URL=http://10.4.69.90/syslab/
-SYSLAB_USER=<usuario_syslab>
-SYSLAB_PASS=<clave_syslab>
-```
-
-## Ejecucion local
-
-```bash
-cd "/Users/daniel/Documents/scraper LAB"
-node server.js
-```
-
-El servicio queda disponible en:
-
-```text
-http://localhost:3000
-```
-
-## Uso con HHR local
-
-HHR debe tener:
-
-```bash
-VITE_SYSLAB_API_URL=http://localhost:3000
-VITE_SYSLAB_ENABLE_DIRECT_LOCAL=true
-```
-
-Levantar HHR en otro puerto, por ejemplo:
-
-```bash
-cd "/Users/daniel/Documents/HHR 2026 tracker version MacBookAir"
-VITE_SYSLAB_ENABLE_DIRECT_LOCAL=true npm run dev -- --host 0.0.0.0 --port 3020
-```
-
-## Uso con HHR desplegado en Netlify
-
-Netlify no puede acceder al `localhost` del Mac ni directamente a `10.4.69.90`. Para que Lab funcione en produccion:
-
-1. Este scraper debe estar corriendo en el Mac local (`localhost:3000`).
-2. El Mac debe tener acceso real a `http://10.4.69.90/syslab/`.
-3. Debe existir un tunel publico hacia `localhost:3000`.
-4. Netlify debe tener `SYSLAB_PROXY_URL` apuntando a ese tunel.
-
-Ejemplo:
-
-```bash
+```sh
+cd "$HOME/HHR-laboratorio"
 npm run tunnel:ngrok
 ```
 
-Verificar:
+Ngrok se inicia con inspección deshabilitada para no capturar solicitudes clínicas.
+El dominio debe ser de tu cuenta y apuntar a `http://127.0.0.1:3100`; no reutilices un dominio
+histórico sin verificarlo. Ejecuta `npm run check:syslab` desde otra terminal: usa la clave
+local sin imprimirla y comprueba la sesión tanto por loopback como por el túnel.
+La comprobación directa de la página de Syslab es orientativa; no consulta pacientes.
 
-```bash
-curl "https://hyperkalemic-transthoracic-lecia.ngrok-free.dev/health"
+## Arranque automático en macOS
+
+Después de que las pruebas manuales pasen, detén ambos procesos manuales y ejecuta:
+
+```sh
+npm run mac:install-agent
 ```
 
-Si el tunel esta offline, Netlify devolvera `503` en `/.netlify/functions/syslab-proxy?action=health` y el boton Lab aparecera deshabilitado.
+Instala únicamente `cl.hhr.syslab` y `cl.hhr.syslab-tunnel` en los LaunchAgents de tu usuario.
+Reejecutarlo actualiza esos mismos servicios. Usa rutas absolutas para Node y ngrok;
+`caffeinate -i` evita suspensión por inactividad mientras el servidor está activo.
+Requiere iniciar sesión después de reiniciar, especialmente con FileVault. No evita un
+corte de energía ni enciende un Mac apagado. No cambies la carpeta ni Node sin reinstalar
+los agentes. Para revisar el estado:
 
-## Diagnostico rapido
-
-```bash
-npm run check:syslab
-curl "http://localhost:3000/health"
-curl -I --max-time 5 "http://10.4.69.90/syslab/"
-curl "https://<SYSLAB_PROXY_URL>/health"
+```sh
+launchctl print "gui/$(id -u)/cl.hhr.syslab"
+launchctl print "gui/$(id -u)/cl.hhr.syslab-tunnel"
 ```
 
-Interpretacion:
+El instalador imprime los comandos de detención. Cloudflare Tunnel es compatible con el
+servidor, pero su servicio se instala por separado; el instalador automático usa ngrok.
 
-- Falla `localhost:3000/health`: el scraper no esta corriendo.
-- Falla `10.4.69.90/syslab`: no hay acceso real a Syslab.
-- Falla `SYSLAB_PROXY_URL/health`: el tunel esta apagado, mal apuntado o caducado.
+## Configurar Netlify y activar
 
-`npm run check:syslab` resume el estado del scraper local y del tunel publico en una sola salida. Tambien muestra el acceso directo a Syslab como advertencia orientativa, porque el flujo real usa Playwright y puede comportarse distinto a `curl`.
+Sitio de HHR actual: `testinghhr` / `https://hhr-hospitalizados.app`.
+Variables del sitio, nunca en código ni en `netlify.toml`:
 
-## Logs
+- `SYSLAB_API_TOKEN`: secreto, alcance **Functions**, mismo valor que `.env` del Mac.
+- `SYSLAB_PROXY_URL`: URL HTTPS confirmada del túnel; alcance **Functions**.
+- `VITE_SYSLAB_TRANSPORT`: `remote`, alcance **Builds**, solo después de comprobar el Mac.
 
-- `logs/combined.log`: eventos generales.
-- `logs/error.log`: fallos de navegacion, login o scraping.
-- `logs/debug_post_aceptar_*.html`: HTML capturado despues de buscar RUT.
-- `logs/raw_extract_*.txt`: texto crudo extraido desde PDFs.
-- `logs/login_error_*.png`: capturas de error de login.
+Las variables se incorporan a un despliegue nuevo; guardarlas no modifica uno ya publicado.
+No copies usuario/contraseña Syslab a Netlify. La función conserva la autorización Firebase
+por rol; la clave compartida protege la conexión entre servidores y no llega al navegador.
+Antes de activar, comprobar `/health` autenticado y después una consulta autorizada del
+paciente correcto desde HHR, incluyendo PDF, análisis y desconexión del Mac. La prueba local
+sintética no acredita acceso al Syslab real.
 
-## Tests
+Para revertir al flujo actual, poner `VITE_SYSLAB_TRANSPORT=extension` y desplegar de nuevo.
+Conservar la clave para reinstalar el servidor; no desproteger el túnel.
 
-```bash
-npm test
+## Desarrollo y pruebas
+
+```sh
+npm ci
+npx playwright install chromium
+npm test -- --runInBand
 ```
 
-## Documentacion tecnica
+Las pruebas incluyen un portal Syslab HTTP local y PDF completamente sintéticos: búsqueda,
+sesión/cookies, descarga, análisis, identidad equivocada, referencias vencidas, autenticación
+y fallo sin filtración de excepciones. No requieren la LAN del hospital ni credenciales.
 
-El documento detallado esta en:
+Los logs contienen estado operativo, nunca RUT, rutas de informes, HTML, texto clínico,
+contraseñas ni capturas. No se guardan PDFs en disco. Los archivos de log del servidor rotan;
+los logs de LaunchAgent deben supervisarse como cualquier servicio local.
 
-```text
-technical_data_access.md
-technical_data_access_actualizado_2026-05-06.pdf
-```
+`technical_data_access.md` describe el scraper anterior y es histórico. El contrato vigente
+para instalar y conectar HHR es este README y el código de la versión 2.

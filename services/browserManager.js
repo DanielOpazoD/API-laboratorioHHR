@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config/env');
 const logger = require('../utils/logger');
+const { isAllowedResource } = require('./reportAccess');
 
 class BrowserManager {
   constructor() {
@@ -17,11 +18,18 @@ class BrowserManager {
     logger.info(`Iniciando navegador (headless: ${headless})`);
     return await chromium.launch({ 
       headless,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security']
+      args: []
     });
   }
 
+  async configureContext(context) {
+    context.setDefaultTimeout(15_000);
+    await context.route('**/*', route => isAllowedResource(route.request().url())
+      ? route.continue() : route.abort());
+  }
+
   async login(page) {
+    if (!config.syslab.user || !config.syslab.pass) throw new Error('Faltan las credenciales locales de Syslab.');
     try {
       logger.info('Intentando login en Syslab...');
       const userInput = page.locator('input[name="usuario"], input[type="text"]').first();
@@ -36,14 +44,14 @@ class BrowserManager {
       
       await page.waitForLoadState('networkidle');
       
+      if (await page.locator('input[type="password"]').count()) throw new Error('Sesión no iniciada.');
       const errorMsg = await page.innerText('body');
       if (errorMsg.toLowerCase().includes('incorrecto') || errorMsg.toLowerCase().includes('error')) {
-        logger.warn('Posible error de credenciales detectado en Syslab.');
+        throw new Error('Syslab rechazó el inicio de sesión.');
       }
     } catch (e) {
-      logger.error(`Falla en Login: ${e.message}`);
-      await page.screenshot({ path: path.join(this.logsDir, `login_error_${Date.now()}.png`) });
-      throw new Error(`Falla en Login: ${e.message}`);
+      logger.warn('Falló el inicio de sesión de Syslab.');
+      throw new Error('No se pudo iniciar sesión en Syslab. Comprueba las credenciales y la red local.');
     }
   }
 }

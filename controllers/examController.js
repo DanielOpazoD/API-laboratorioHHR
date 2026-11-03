@@ -3,12 +3,12 @@ const logger = require('../utils/logger');
 
 exports.getExams = async (req, res, next) => {
   const { rut } = req.query;
-  if (!rut) {
+  if (typeof rut !== 'string' || !/^\d{5,9}$/.test(rut)) {
     return res.status(400).json({ success: false, error: 'Se requiere un RUT válido para la búsqueda.' });
   }
 
   try {
-    logger.info(`API: Iniciando búsqueda para RUT: ${rut}`);
+    logger.info('API: consulta de órdenes.');
     const result = await scraperOrchestrator.getExamsList(rut);
     res.json(result);
   } catch (error) {
@@ -23,7 +23,7 @@ exports.getExamPdf = async (req, res, next) => {
   }
 
   try {
-    logger.info(`API: Descargando PDF para link: ${link}`);
+    logger.info('API: lectura de informe.');
     const buffer = await scraperOrchestrator.getExamPdf(link);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', buffer.length);
@@ -36,7 +36,7 @@ exports.getExamPdf = async (req, res, next) => {
 exports.getExamsDetails = async (req, res, next) => {
   const { links } = req.body;
   
-  if (!links || !Array.isArray(links)) {
+  if (!Array.isArray(links) || links.length < 1 || links.length > 3 || links.some(link => typeof link !== 'string')) {
     return res.status(400).json({ success: false, error: 'Se requiere una lista de enlaces para obtener detalles.' });
   }
 

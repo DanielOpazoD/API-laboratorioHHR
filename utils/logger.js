@@ -7,7 +7,7 @@ const path = require('path');
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.timestamp({ format: () => new Date().toISOString() }),
     winston.format.printf(info => `[${info.timestamp}] ${info.level.toUpperCase()}: ${info.message}`)
   ),
   transports: [
@@ -17,12 +17,14 @@ const logger = winston.createLogger({
         winston.format.printf(info => `[${info.timestamp}] ${info.level}: ${info.message}`)
       )
     }),
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/error.log'), 
-      level: 'error' 
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/error.log'),
+      maxsize: 1_000_000, maxFiles: 3,
+      level: 'error'
     }),
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/combined.log') 
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/combined.log'),
+      maxsize: 1_000_000, maxFiles: 3
     })
   ]
 });
