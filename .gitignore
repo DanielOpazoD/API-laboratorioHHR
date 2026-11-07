@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 logs/
 downloads/
 .DS_Store
@@ -7,3 +7,5 @@ downloads/
 *.txt
 debug_*.txt
 last_result.html
+
+state/

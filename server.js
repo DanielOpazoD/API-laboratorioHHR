@@ -3,8 +3,9 @@ const { timingSafeEqual } = require('node:crypto');
 const config = require('./config/env');
 const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
+const { createJobRoutes } = require('./routes/jobs');
 
-const createApp = () => {
+const createApp = ({ getJobs } = {}) => {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -20,7 +21,7 @@ const createApp = () => {
     }
     next();
   });
-  app.use(express.json({ limit: '32kb' }));
+  app.use(express.json({ limit: '1mb' }));
   // Process liveness only: recovery must not confuse a Syslab outage with a dead Node process.
   app.get('/live', (_req, res) => res.json({ success: true, service: 'syslab-scraper' }));
   app.get('/health', async (_req, res) => {
@@ -32,6 +33,7 @@ const createApp = () => {
       res.status(503).json({ success: false, connected: false, error: 'No se pudo iniciar sesión en Syslab desde el Mac mini.' });
     }
   });
+  app.use('/api', createJobRoutes(getJobs));
   app.use('/api', apiRoutes);
   app.use((err, _req, res, _next) => {
     logger.warn('No se pudo completar una solicitud de laboratorio.');
@@ -48,6 +50,7 @@ if (require.main === module) {
     console.error('Configura SYSLAB_API_TOKEN (mínimo 32 caracteres), SYSLAB_USER y SYSLAB_PASS en .env.');
     process.exitCode = 1;
   } else {
+    require('./services/laboratoryJobs').getLaboratoryJobs();
     createApp().listen(config.port, config.host, () => logger.info('Servidor Syslab disponible en loopback.'));
   }
 }
