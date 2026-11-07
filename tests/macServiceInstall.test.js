@@ -82,3 +82,19 @@ test('installs supervised user agents without admin authorization or changing en
   expect(h.execFileSync.mock.calls.some(([binary]) => binary.endsWith('/pmset'))).toBe(false);
   expect(h.files.has('/Library/LaunchDaemons/cl.hhr.syslab.plist')).toBe(false);
 });
+
+test('allows launchd to release a booted-out job and bounds failed bootstrap retries', () => {
+  const { runCommand } = require('../scripts/install-mac-services');
+  const busy = Object.assign(new Error('registration still releasing'), { status: 5 });
+  const pause = jest.fn();
+  const execute = jest.fn().mockImplementationOnce(() => { throw busy; }).mockReturnValue('loaded');
+  expect(runCommand('/bin/launchctl', ['bootstrap', 'gui/501', '/synthetic.plist'], execute, pause)).toBe('loaded');
+  expect(pause).toHaveBeenCalledTimes(1);
+  const unavailable = jest.fn(() => { throw busy; });
+  expect(() => runCommand('/bin/launchctl', ['bootstrap', 'system', '/synthetic.plist'], unavailable, pause)).toThrow(busy);
+  expect(unavailable).toHaveBeenCalledTimes(13);
+  const denied = Object.assign(new Error('permission denied'), { status: 1 });
+  const reject = jest.fn(() => { throw denied; });
+  expect(() => runCommand('/bin/launchctl', ['bootstrap', 'system', '/synthetic.plist'], reject, pause)).toThrow(denied);
+  expect(reject).toHaveBeenCalledTimes(1);
+});
