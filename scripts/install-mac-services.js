@@ -8,6 +8,8 @@ const { buildServicePlan } = require('./mac-service-plan');
 function install() {
   if (process.platform !== 'darwin') throw new Error('Este instalador requiere macOS.');
   const prepare = process.argv.includes('--prepare');
+  const userScope = process.argv.includes('--user');
+  if (userScope && process.getuid() === 0) throw new Error('El servicio de usuario se instala sin sudo.');
   const sourceRoot = path.resolve(__dirname, '..');
   const root = process.env.HHR_INSTALL_ROOT || sourceRoot;
   const username = process.getuid() === 0 ? process.env.SUDO_USER : os.userInfo().username;
@@ -18,7 +20,7 @@ function install() {
     .replace(/^NFSHomeDirectory:\s*/, '').trim();
   const ngrok = ['/opt/homebrew/bin/ngrok', '/usr/local/bin/ngrok'].find(file => fs.existsSync(file));
   if (!ngrok) throw new Error('Instala ngrok antes de preparar los servicios.');
-  const jobs = buildServicePlan({ root, home, username, uid, node: process.execPath, ngrok });
+  const jobs = buildServicePlan({ root, home, username, uid, node: process.execPath, ngrok, scope: userScope ? 'user' : 'system' });
   const envFile = path.join(root, '.env');
   const envStat = fs.lstatSync(envFile);
   if (!envStat.isFile() || envStat.isSymbolicLink() || envStat.uid !== uid || (envStat.mode & 0o077)) {
@@ -49,20 +51,23 @@ function install() {
     execFileSync('/usr/bin/plutil', ['-lint', file], { stdio: 'ignore' });
   }
   if (prepare) {
-    console.log('Plan validado. Dos servicios system ejecutados como el usuario habitual; FileVault y SSH sin cambios.');
+    console.log(`Plan validado. Dos servicios ${userScope ? 'de usuario' : 'system'}; FileVault y SSH sin cambios.`);
     return;
   }
-  if (process.getuid() !== 0) throw new Error('Instalación preparada: ejecútala con sudo para autorizar servicios y recuperación de energía.');
+  if (!userScope && process.getuid() !== 0) throw new Error('Instalación preparada: ejecútala con sudo para autorizar servicios y recuperación de energía.');
   for (const file of ['scripts/supervise-service.js', 'services/recoverySupervisor.js', 'server.js']) {
     if (!fs.statSync(path.join(root, file)).isFile()) throw new Error('Actualiza el servidor antes de instalar.');
   }
   const backup = path.join(root, 'logs', `before-system-services-${Date.now()}`);
   fs.mkdirSync(backup, { recursive: true, mode: 0o700 });
-  fs.chownSync(backup, uid, 20);
+  if (!userScope) fs.chownSync(backup, uid, 20);
   const command = (binary, args) => execFileSync(binary, args, { stdio: 'ignore' });
   const loaded = domain => {
     try { command('/bin/launchctl', ['print', domain]); return true; } catch { return false; }
   };
+  if (userScope && jobs.some(job => loaded(`system/${job.label}`))) {
+    throw new Error('Ya existe un servicio del sistema; no se duplicará.');
+  }
   const movedAgents = [];
   const oldSystem = [];
   const started = [];
@@ -78,6 +83,13 @@ function install() {
         movedAgents.push({ agent, saved });
       }
       const systemDomain = `system/${job.label}`;
+      if (userScope) {
+        fs.writeFileSync(agent, job.plist, { mode: 0o600 });
+        written.push(agent);
+        command('/bin/launchctl', ['bootstrap', `gui/${uid}`, agent]);
+        started.push({ label: job.label, target: agent });
+        continue;
+      }
       if (loaded(systemDomain)) command('/bin/launchctl', ['bootout', systemDomain]);
       const target = path.join('/Library/LaunchDaemons', job.label + '.plist');
       if (fs.existsSync(target)) {
@@ -94,10 +106,10 @@ function install() {
       command('/bin/launchctl', ['bootstrap', 'system', target]);
       started.push({ label: job.label, target });
     }
-    command('/usr/bin/pmset', ['-a', 'autorestart', '1']);
+    if (!userScope) command('/usr/bin/pmset', ['-a', 'autorestart', '1']);
   } catch {
     for (const job of started) {
-      try { command('/bin/launchctl', ['bootout', `system/${job.label}`]); } catch {}
+      try { command('/bin/launchctl', ['bootout', `${userScope ? `gui/${uid}` : 'system'}/${job.label}`]); } catch {}
     }
     for (const target of written) fs.renameSync(target, path.join(backup, path.basename(target) + '.failed'));
     for (const { target, saved } of oldSystem) {
@@ -110,7 +122,8 @@ function install() {
     }
     throw new Error('Instalación incompleta; se intentó restaurar los servicios anteriores. Revisa launchctl antes de reiniciar.');
   }
-  console.log('Servicios system instalados sin privilegios de root para el proceso. Recuperación de energía activada. FileVault conservado.');
+  console.log(userScope ? 'Supervisión de usuario instalada. Requiere iniciar sesión tras reiniciar; energía sin cambios.'
+    : 'Servicios system instalados sin privilegios de root para el proceso. Recuperación de energía activada. FileVault conservado.');
   console.log('El disco debe desbloquearse después de un arranque en frío. No se ha reiniciado el Mac.');
 }
 

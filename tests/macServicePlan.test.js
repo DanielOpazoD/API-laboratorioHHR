@@ -25,3 +25,9 @@ test('escapes paths in valid plist XML without including secrets', () => {
   const [job] = buildServicePlan({ ...input, root: '/Users/synthetic/server & helpers' });
   expect(job.plist).toContain('server &amp; helpers');
 });
+test('the user-only fallback has the same supervisors without system-user directives', () => {
+  for (const job of buildServicePlan({ ...input, scope: 'user' })) {
+    expect(job.plist).not.toMatch(/<key>UserName|<key>GroupName/);
+    expect(job.args).toContain('/Users/synthetic/HHR-laboratorio/scripts/supervise-service.js');
+  }
+});

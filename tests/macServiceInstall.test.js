@@ -1,19 +1,23 @@
 const platform = Object.getOwnPropertyDescriptor(process, 'platform');
 const previousUser = process.env.SUDO_USER;
 const previousRoot = process.env.HHR_INSTALL_ROOT;
+const originalArgv = [...process.argv];
 
 afterEach(() => {
   Object.defineProperty(process, 'platform', platform);
   if (previousUser === undefined) delete process.env.SUDO_USER; else process.env.SUDO_USER = previousUser;
   if (previousRoot === undefined) delete process.env.HHR_INSTALL_ROOT; else process.env.HHR_INSTALL_ROOT = previousRoot;
   jest.restoreAllMocks(); jest.resetModules(); jest.dontMock('node:fs'); jest.dontMock('node:child_process');
+  process.argv = [...originalArgv];
 });
 
-const setup = (failTunnel = false) => {
+const setup = (failTunnel = false, userScope = false) => {
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   process.env.SUDO_USER = 'synthetic';
   process.env.HHR_INSTALL_ROOT = '/Users/synthetic/HHR-laboratorio';
-  jest.spyOn(process, 'getuid').mockReturnValue(0);
+  jest.spyOn(process, 'getuid').mockReturnValue(userScope ? 501 : 0);
+  jest.spyOn(require('node:os'), 'userInfo').mockReturnValue({ username: 'synthetic' });
+  if (userScope) process.argv.push('--user');
   const files = new Map([
     ['/Users/synthetic/HHR-laboratorio/.env', 'SYSLAB_USER=synthetic\nSYSLAB_PASS=synthetic\nSYSLAB_API_TOKEN=' + 'synthetic'.repeat(8) + '\nSYSLAB_PROXY_URL=https://synthetic.ngrok-free.dev\nHOST=127.0.0.1'],
     ['/opt/homebrew/bin/ngrok', 'binary'],
@@ -70,4 +74,11 @@ test('on partial installation failure removes new boot definitions and restores 
   expect(h.files.has('/Library/LaunchDaemons/cl.hhr.syslab-tunnel.plist')).toBe(false);
   expect(h.files.get('/Users/synthetic/Library/LaunchAgents/cl.hhr.syslab.plist')).toBe('old-server-agent');
   expect(h.execFileSync.mock.calls.some(([binary]) => binary.endsWith('/pmset'))).toBe(false);
+});
+test('installs supervised user agents without admin authorization or changing energy', () => {
+  const h = setup(false, true); h.install();
+  expect(h.loaded).toEqual(new Set(['gui/501/cl.hhr.syslab', 'gui/501/cl.hhr.syslab-tunnel']));
+  expect(h.files.get('/Users/synthetic/Library/LaunchAgents/cl.hhr.syslab.plist')).not.toContain('<key>UserName');
+  expect(h.execFileSync.mock.calls.some(([binary]) => binary.endsWith('/pmset'))).toBe(false);
+  expect(h.files.has('/Library/LaunchDaemons/cl.hhr.syslab.plist')).toBe(false);
 });

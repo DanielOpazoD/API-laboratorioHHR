@@ -187,6 +187,13 @@ en Internet ni desactives FileVault. Para automatizar también ese desbloqueo se
 un segundo equipo disponible y una decisión explícita sobre custodia de credenciales.
 Este instalador no guarda la contraseña de macOS ni la clave de recuperación.
 
+Si aún no puedes autorizar cambios de administrador, puedes activar la misma supervisión
+en los agentes actuales: `node scripts/install-mac-services.js --user`. Recupera procesos y
+conexión mientras la sesión del usuario exista, sin modificar energía. No equivale al
+arranque sin escritorio: la instalación de sistema sigue pendiente. La posterior migración
+retira esos agentes para evitar duplicarlos. No instales agentes si ya existen los servicios
+de sistema; el instalador lo rechaza.
+
 Antes de una prueba real de reinicio, verifica el canal de desbloqueo y la posibilidad de
 recuperar acceso. Las pruebas de procesos y portal ficticio no acreditan un arranque real
 con FileVault bloqueado. Un UPS reduce cortes; el software no sustituye electricidad y red.

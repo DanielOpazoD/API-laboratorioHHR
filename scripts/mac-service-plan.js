@@ -2,7 +2,8 @@ const path = require('node:path');
 const xml = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const buildServicePlan = ({ root, home, username, uid, node, ngrok }) => {
+const buildServicePlan = ({ root, home, username, uid, node, ngrok, scope = 'system' }) => {
+  if (!['system', 'user'].includes(scope)) throw new Error('Ámbito de servicio no válido.');
   if (!/^[a-z_][a-z0-9_.-]*$/i.test(username) || username === 'root' || !Number.isInteger(uid) || uid < 1) {
     throw new Error('Los servicios deben ejecutarse como usuario sin privilegios.');
   }
@@ -25,8 +26,7 @@ const buildServicePlan = ({ root, home, username, uid, node, ngrok }) => {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${label}</string>
-<key>UserName</key><string>${xml(username)}</string>
-<key>GroupName</key><string>staff</string>
+${scope === 'system' ? `<key>UserName</key><string>${xml(username)}</string>\n<key>GroupName</key><string>staff</string>` : ''}
 <key>ProgramArguments</key><array>${args.map(v => `<string>${xml(v)}</string>`).join('')}</array>
 <key>WorkingDirectory</key><string>${xml(root)}</string>
 <key>EnvironmentVariables</key><dict>${Object.entries(environment).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join('')}</dict>
