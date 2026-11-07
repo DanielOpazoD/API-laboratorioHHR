@@ -94,8 +94,9 @@ test('checks the native agent frequently but limits public tunnel heartbeats to 
   const check = jest.fn(async () => 'healthy');
   const checkAgent = jest.fn(async () => 'healthy');
   const probe = createProbe({ component: 'tunnel', port: 3100,
-    proxyUrl: 'https://synthetic.ngrok-free.dev', token: 'synthetic', check, checkAgent, now: () => time });
+    proxyUrl: 'https://SYNTHETIC.ngrok-free.dev/', token: 'synthetic', check, checkAgent, now: () => time });
   expect(await probe()).toBe('healthy');
+  expect(checkAgent).toHaveBeenCalledWith('https://synthetic.ngrok-free.dev', 3100);
   for (let i = 0; i < 5; i++) { time += 30_000; expect(await probe()).toBe('deferred'); }
   expect(check.mock.calls.filter(([url]) => url.startsWith('https:'))).toHaveLength(1);
   checkAgent.mockResolvedValueOnce('unreachable');

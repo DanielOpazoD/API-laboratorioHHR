@@ -31,7 +31,7 @@ const probeAgent = async (proxyUrl, port) => {
 const createProbe = ({ component, port, proxyUrl, token, check = probeLive,
   checkAgent = probeAgent, now = Date.now }) => {
   let nextPublicCheck = 0;
-  const publicBase = proxyUrl?.replace(/\/+$/, '');
+  const publicBase = proxyUrl ? new URL(proxyUrl).origin : undefined;
   return async () => {
     const local = await check(`http://127.0.0.1:${port}/live`, token);
     if (component === 'server' || local === 'authentication-required') return local;
