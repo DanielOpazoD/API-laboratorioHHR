@@ -5,6 +5,19 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { buildServicePlan } = require('./mac-service-plan');
 
+// bootout can return before launchd releases its registration. Retry only that
+// transient bootstrap error, including when restoring the previous definition.
+function runCommand(binary, args, execute = execFileSync,
+  pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)) {
+  for (let attempt = 0; ; attempt++) {
+    try { return execute(binary, args, { stdio: 'ignore' }); }
+    catch (error) {
+      if (binary !== '/bin/launchctl' || args[0] !== 'bootstrap' || error.status !== 5 || attempt >= 12) throw error;
+      pause();
+    }
+  }
+}
+
 function install() {
   if (process.platform !== 'darwin') throw new Error('Este instalador requiere macOS.');
   const prepare = process.argv.includes('--prepare');
@@ -61,7 +74,7 @@ function install() {
   const backup = path.join(root, 'logs', `before-system-services-${Date.now()}`);
   fs.mkdirSync(backup, { recursive: true, mode: 0o700 });
   if (!userScope) fs.chownSync(backup, uid, 20);
-  const command = (binary, args) => execFileSync(binary, args, { stdio: 'ignore' });
+  const command = runCommand;
   const loaded = domain => {
     try { command('/bin/launchctl', ['print', domain]); return true; } catch { return false; }
   };
@@ -130,4 +143,4 @@ function install() {
 if (require.main === module) {
   try { install(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { install };
+module.exports = { install, runCommand };
