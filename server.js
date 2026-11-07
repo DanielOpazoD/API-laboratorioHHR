@@ -50,8 +50,20 @@ if (require.main === module) {
     console.error('Configura SYSLAB_API_TOKEN (mínimo 32 caracteres), SYSLAB_USER y SYSLAB_PASS en .env.');
     process.exitCode = 1;
   } else {
-    require('./services/laboratoryJobs').getLaboratoryJobs();
-    createApp().listen(config.port, config.host, () => logger.info('Servidor Syslab disponible en loopback.'));
+    const server = createApp().listen(config.port, config.host, () => {
+      try {
+        // Acquire the unique listener before opening or recovering durable work.
+        require('./services/laboratoryJobs').getLaboratoryJobs();
+        logger.info('Servidor Syslab disponible en loopback.');
+      } catch {
+        logger.error('No se pudo abrir la cola privada de laboratorio. Conserva sus archivos y revisa el almacenamiento.');
+        server.close(() => { process.exitCode = 1; });
+      }
+    });
+    server.on('error', () => {
+      logger.error('No se pudo iniciar el servidor Syslab. Comprueba que no exista otro proceso sobre el mismo puerto.');
+      process.exitCode = 1;
+    });
   }
 }
 module.exports = { createApp };

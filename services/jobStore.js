@@ -17,6 +17,9 @@ class JobStore {
     this.key = fs.readFileSync(keyFile);
     if (this.key.length !== 32) throw new Error('Clave de cola no válida.');
     fs.chmodSync(keyFile, 0o600);
+    // The key must reach disk before a durable encrypted checkpoint can depend on it.
+    const keyFd = fs.openSync(keyFile, 'r+');
+    try { fs.fsyncSync(keyFd); } finally { fs.closeSync(keyFd); }
   }
 
   load() {
