@@ -16,11 +16,32 @@ const probeLive = async (url, token, timeoutMs = 4_000, fetchImpl = fetch) => {
   } catch { return 'unreachable'; }
 };
 
-const createProbe = ({ component, port, proxyUrl, token, check = probeLive }) => async () => {
-  const local = await check(`http://127.0.0.1:${port}/live`, token);
-  if (component === 'server' || local === 'authentication-required') return local;
-  if (local !== 'healthy') return 'dependency-unavailable';
-  return check(`${proxyUrl}/live`, token, 10_000);
+const probeAgent = async (proxyUrl, port) => {
+  try {
+    const response = await fetch('http://127.0.0.1:4040/api/tunnels', {
+      redirect: 'error', signal: AbortSignal.timeout(4_000),
+    });
+    const body = await response.json();
+    return response.ok && body.tunnels?.some(t => t.public_url === proxyUrl &&
+      t.config?.addr === `http://127.0.0.1:${port}` && t.config?.inspect === false)
+      ? 'healthy' : 'unreachable';
+  } catch { return 'unreachable'; }
+};
+
+const createProbe = ({ component, port, proxyUrl, token, check = probeLive,
+  checkAgent = probeAgent, now = Date.now }) => {
+  let nextPublicCheck = 0;
+  const publicBase = proxyUrl?.replace(/\/+$/, '');
+  return async () => {
+    const local = await check(`http://127.0.0.1:${port}/live`, token);
+    if (component === 'server' || local === 'authentication-required') return local;
+    if (local !== 'healthy') return 'dependency-unavailable';
+    if (await checkAgent(publicBase, port) !== 'healthy') return 'unreachable';
+    // Local checks remain frequent; one external heartbeat per five minutes avoids quota churn.
+    if (now() < nextPublicCheck) return 'deferred';
+    nextPublicCheck = now() + 5 * 60_000;
+    return check(`${publicBase}/live`, token, 10_000);
+  };
 };
 
 const terminate = child => new Promise(resolve => {
@@ -54,7 +75,7 @@ async function main() {
   let previousState;
   const supervisor = new RecoverySupervisor({
     history,
-    threshold: component === 'tunnel' ? 6 : 3,
+    threshold: 3,
     launch: () => {
       const binary = component === 'server' ? process.execPath : process.env.HHR_NGROK_BINARY;
       const args = component === 'server' ? [path.join(root, 'server.js')]
@@ -92,4 +113,4 @@ if (require.main === module) main().catch(() => {
   console.error('No se pudo iniciar la supervisión. Revisa la configuración local.');
   process.exitCode = 1;
 });
-module.exports = { probeLive, createProbe, terminate };
+module.exports = { probeLive, probeAgent, createProbe, terminate };

@@ -42,6 +42,7 @@ class RecoverySupervisor {
       let result;
       try { result = await this.probe(); } catch { result = 'unreachable'; }
       if (this.stopped) return;
+      if (result === 'deferred') return;
       this.state = result;
       // A failed dependency or credential requires recovery there, not a tunnel restart loop.
       if (['healthy', 'dependency-unavailable', 'authentication-required'].includes(result)) {

@@ -150,8 +150,10 @@ restaurar las anteriores; comprueba siempre los estados antes de reiniciar.
 
 La supervisión se ejecuta cada 30 segundos, sin checks simultáneos. Usa `/live` autenticado:
 un fallo de sesión Syslab no se confunde con un proceso muerto. Deja 60 segundos de gracia;
-tras tres fallos consecutivos del servidor o seis del túnel termina el proceso afectado y
-lo vuelve a iniciar. Ngrok conserva también su reconexión nativa durante cortes breves.
+tras tres fallos consecutivos termina el proceso afectado y lo vuelve a iniciar.
+El agente ngrok se comprueba localmente cada 30 segundos; la prueba por Internet se limita
+a una cada cinco minutos para evitar tráfico innecesario. Las comprobaciones externas
+aplazadas no borran fallos previos ni incrementan su cuenta. Ngrok conserva también su reconexión nativa durante cortes breves.
 Si el servidor local está caído no reinicia el túnel, y una respuesta 401/403 pide revisar
 credenciales sin entrar en un bucle. Nunca repite consultas clínicas ni descarga informes.
 
