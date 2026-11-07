@@ -43,12 +43,13 @@ class ScraperOrchestrator {
       const patientName = tds[3].innerText.trim();
       const origin = tds[4].innerText.trim();
       const examsTags = Array.from(tds[5].querySelectorAll('.mitabla tr td'));
+      const validationSignature = examsTags.map(td => td.innerText.trim()).join('|');
       const examNames = examsTags
         .map(td => td.innerText.replace(/\(V\)|\(P\)/g, '').trim())
         .filter(e => e !== '');
       const link = href ? new URL(href.trim(), document.baseURI || window.location.href).href : null;
       const rutBody = (tds[2].innerText.match(/\d[\d.]*/) || [''])[0].replace(/\D/g, '');
-      return { id, link, rutBody, date, time, patientName, origin, exams: examNames };
+      return { id, link, rutBody, date, time, patientName, origin, exams: examNames, validationSignature };
     }).filter(Boolean);
   }
 
@@ -93,7 +94,7 @@ class ScraperOrchestrator {
     }
   }
 
-  async readValidatedPdf(context, reference) {
+  async readValidatedPdf(context, reference, allowPending = false) {
     const { link, rutBody } = readReportLink(reference);
     let url = link;
     let bytes;
@@ -117,7 +118,19 @@ class ScraperOrchestrator {
             const element = doc.querySelector('iframe[src], embed[src], object[data], a[href*=".pdf"]');
             return element && (element.getAttribute('src') || element.getAttribute('data') || element.getAttribute('href'));
           }, body.toString('utf8'));
-          if (!nested) throw new Error('Syslab no entregó un PDF verificable. Puede requerir iniciar sesión.');
+          if (!nested) {
+            const pending = await page.evaluate(html => {
+              const doc = new DOMParser().parseFromString(html, 'text/html');
+              if (doc.querySelector('input[type="password"], iframe, embed, object, a[href]')) return false;
+              const visible = doc.body.cloneNode(true);
+              visible.querySelectorAll('script, style').forEach(element => element.remove());
+              const text = (visible.textContent || '').replace(/\s+/g, ' ').trim();
+              return /no hay ex(?:á|a|�|Ã¡)menes validados/i.test(doc.documentElement.textContent || '') &&
+                (!text || /^no hay ex(?:á|a|�|Ã¡)menes validados[.!]?$/i.test(text));
+            }, body.toString('utf8'));
+            if (pending && allowPending) return { pending: true };
+            throw new Error('Syslab no entregó un PDF verificable. Puede requerir iniciar sesión.');
+          }
           url = new URL(nested, url).href;
         } finally { await page.close(); }
       } finally { await response.dispose(); }
@@ -156,11 +169,12 @@ class ScraperOrchestrator {
       throw new Error('La selección mezcla pacientes o informes repetidos.');
     }
     return this.withAuthenticatedContext(async context => {
-      const data = await this.mapWithConcurrency(links, DETAILS_CONCURRENCY, async url => {
-        const { text } = await this.readValidatedPdf(context, url);
-        return { url, findings: parseReportText(text) };
+      const results = await this.mapWithConcurrency(links, DETAILS_CONCURRENCY, async url => {
+        const material = await this.readValidatedPdf(context, url, true);
+        return material.pending ? { url, pending: true } : { url, findings: parseReportText(material.text) };
       });
-      return { success: true, data };
+      return { success: true, data: results.filter(item => !item.pending),
+        omittedUrls: results.filter(item => item.pending).map(item => item.url) };
     });
   }
 }

@@ -199,3 +199,55 @@ de sistema; el instalador lo rechaza.
 Antes de una prueba real de reinicio, verifica el canal de desbloqueo y la posibilidad de
 recuperar acceso. Las pruebas de procesos y portal ficticio no acreditan un arranque real
 con FileVault bloqueado. Un UPS reduce cortes; el software no sustituye electricidad y red.
+## Cola de laboratorio y bandeja del censo
+
+El gateway Netlify autentica y autoriza cada petición con Firebase y añade
+`X-HHR-Lab-Owner`, SHA-256 del proyecto, UID verificado y hospital. Nunca se toma
+el operador del navegador. Además se exige el Bearer privado ya existente.
+La revisión de resultados es personal por operador, paciente y episodio.
+
+- `POST /api/jobs/details` `{links}`: admite hasta 500 informes de un mismo RUN,
+  verifica las referencias antes de admitirlos y responde 202 sin esperar a Syslab.
+- `POST /api/jobs/census` `{patients:[{rutBody,episodeId,admissionDate}],censusDate,force?}`:
+  captura entre 1 y 60 sujetos, excluye fechas fuera del episodio/período y consulta
+  una vez cada orden nueva o con cambios de validación. `force:true` relee las
+  conocidas para comprobar correcciones que no cambien la lista de Syslab.
+- `GET /api/jobs/:id`: estado y progreso, sin el contenido completo del trabajo.
+- `GET /api/jobs/:id/result?offset=0`: páginas completas de resultados de un trabajo
+  finalizado; `index` y `omittedIndices` remiten a las posiciones admitidas. Cada
+  página es de hasta 50 informes y 1 MiB. El cliente valida cobertura completa
+  antes de publicar el análisis. Dos ventanas pueden compartir un trabajo activo.
+- `POST /api/jobs/:id/cancel` y `/retry`: cancelación o reintento explícitos;
+  conservan los puntos ya confirmados. Una lectura en curso puede finalizar pero
+  su resultado no se publica después de cancelar.
+- `POST /api/census/state` con la misma cohorte y `offset`/`onlyUnread` opcionales:
+  bandeja paginada, conteo sin revisar y trabajos de ese día. Renueva los enlaces
+  de PDF para esa lectura, sin enviar rutas internas de Syslab.
+- `POST /api/census/review` `{id,revision}`: confirma sólo la versión que se revisó;
+  una versión cambiada exige nueva lectura y revisión.
+
+El primer barrido presenta los informes disponibles como sin revisar; no afirma
+que todos sean recién emitidos. Las órdenes explícitamente sin exámenes validados
+se contabilizan como pendientes y se vuelven a consultar. Un fallo de red, identidad
+u otro formato no se convierte en ausencia de resultados. Se conserva lo conocido
+si falla una actualización. No escribe el censo ni Firebase.
+
+Un único trabajador limita la carga sobre Syslab y reutiliza una sesión por trabajo
+de informes o por paciente del censo. Las peticiones de HHR sólo crean trabajo y
+consultan progreso; el trabajador continúa al cerrar el navegador. El acceso y la
+presentación se vuelven a autorizar, y cambiar de sesión descarta las respuestas
+pendientes del navegador.
+
+La cola y sus resultados se guardan con AES-256-GCM en `state/laboratory.enc`, con
+clave independiente en `state/laboratory.key` (directorio 700, archivos 600), bajo
+FileVault. `SYSLAB_STATE_DIR` permite elegir otro directorio local. Ambas piezas
+se respaldan juntas, de forma privada: perder la clave hace ilegible el archivo.
+La ausencia de clave o un archivo dañado detienen el servicio; nunca se reinicia
+la cola vacía. Las escrituras son atómicas y sincronizadas a disco. Una falta de
+espacio no confirma trabajo; recuperar espacio y reintentar conserva lo confirmado.
+No se purga trabajo por antigüedad ni número de fallos; el límite de 64 MiB rechaza
+más escrituras y requiere mantenimiento explícito. No borrar `state/` al actualizar.
+
+Los trabajos interrumpidos vuelven a la cola al arrancar. Una prueba sintética con
+portal autenticado, PDFs originales y 32 órdenes (una pendiente) acredita el flujo;
+no acredita un paciente real ni un reinicio en frío del Mac con FileVault bloqueado.

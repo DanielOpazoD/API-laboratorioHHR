@@ -42,6 +42,7 @@ beforeAll(async () => {
     if (url.pathname.endsWith('aplicacion.php') || url.pathname === '/syslab/') return res.end('<a href="parbusqueRut.php">Búsqueda por RUT</a>');
     if (url.pathname.endsWith('parbusqueRut.php')) return res.end('<form action="results.php"><input name="rut"><input type="submit" value="Aceptar"></form>');
     if (url.pathname.endsWith('results.php')) return res.end(`<table class="narrow"><tr><td><a href="detalleexamenes.php?id=123">123</a></td><td>01/11/2026<br>08:00</td><td>${mixed ? '22222222' : '11111111'} 1</td><td>PACIENTE SINTETICO</td><td>HOSPITALIZADO</td><td><table class="mitabla"><tr><td>GLUCOSA(V)</td></tr></table></td></tr></table>`);
+    if (url.pathname.endsWith('detalleexamenes.php') && url.searchParams.get('id') === '999') return res.end('<script>/* No hay exámenes validados */</script>');
     if (url.pathname.endsWith('detalleexamenes.php')) return res.end('<iframe src="report.pdf"></iframe>');
     if (url.pathname.endsWith('report.pdf')) { res.setHeader('Content-Type', 'application/pdf'); return res.end(pdf); }
     res.writeHead(404); res.end();
@@ -64,3 +65,28 @@ test('search, details and original PDF work against an authenticated synthetic S
   mixed = true;
   await expect(scraper.getExamsList('11111111')).rejects.toThrow('otro paciente');
 }, 30_000);
+
+
+test('32 source reports including an unvalidated order finish in one authenticated queue session', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { JobStore } = require('../services/jobStore');
+  const { LaboratoryJobs } = require('../services/laboratoryJobs');
+  const { issueReportLink } = require('../services/reportAccess');
+  mixed = false; pdf = makePdf('11.111.111-1');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hhr-real-portal-jobs-'));
+  const login = jest.spyOn(scraper, 'withAuthenticatedContext');
+  try {
+    const links = Array.from({ length: 32 }, (_, i) => issueReportLink('detalleexamenes.php?id=' + (i === 1 ? 999 : i + 1), '11111111'));
+    const queue = new LaboratoryJobs({ store: new JobStore(directory), scraper, autoStart: false });
+    const job = queue.create('a'.repeat(64), 'details', { links });
+    await queue.drain();
+    expect(queue.get('a'.repeat(64), job.id)).toMatchObject({ status: 'completed', completed: 32, total: 32 });
+    const result = queue.result('a'.repeat(64), job.id);
+    expect(result.data).toHaveLength(31);
+    expect(result.omittedIndices).toEqual([1]);
+    expect(result.data.every(item => item.findings[0].analysis === 'Glucosa')).toBe(true);
+    expect(login).toHaveBeenCalledTimes(1);
+  } finally { login.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+}, 60_000);
