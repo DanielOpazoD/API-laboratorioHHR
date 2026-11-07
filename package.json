@@ -9,7 +9,8 @@
     "tunnel:ngrok": "node scripts/start-tunnel.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "configure:mac": "bash scripts/configure-mac.sh",
-    "mac:install-agent": "node scripts/install-mac-agent.js"
+    "mac:install-agent": "node scripts/install-mac-agent.js",
+    "mac:install-services": "node scripts/install-mac-services.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

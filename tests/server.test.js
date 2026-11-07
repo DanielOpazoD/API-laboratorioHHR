@@ -25,6 +25,14 @@ test('health verifies the Syslab session rather than only process uptime', async
   jest.spyOn(scraper, 'withAuthenticatedContext').mockResolvedValueOnce(undefined);
   expect(await (await request('/health')).json()).toMatchObject({ connected: true });
 });
+test('liveness is authenticated and does not log in or query Syslab', async () => {
+  const login = jest.spyOn(scraper, 'withAuthenticatedContext');
+  expect((await fetch(base + '/live')).status).toBe(401);
+  const response = await request('/live');
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(await response.json()).toEqual({ success: true, service: 'syslab-scraper' });
+  expect(login).not.toHaveBeenCalled();
+});
 test('refuses malformed identities and unbounded detail requests', async () => {
   expect((await request('/api/exams?rut=PASSPORT123')).status).toBe(400);
   const response = await request('/api/exams/details', { method: 'POST',
