@@ -251,3 +251,16 @@ más escrituras y requiere mantenimiento explícito. No borrar `state/` al actua
 Los trabajos interrumpidos vuelven a la cola al arrancar. Una prueba sintética con
 portal autenticado, PDFs originales y 32 órdenes (una pendiente) acredita el flujo;
 no acredita un paciente real ni un reinicio en frío del Mac con FileVault bloqueado.
+
+## Período de la actualización del censo
+
+`POST /api/jobs/census` y `POST /api/census/state` aceptan opcionalmente
+`dateRange: { from: "2026-10-01", to: "2026-11-07" }` (días ISO, extremos incluidos).
+Sin ese campo se conserva el comportamiento anterior: desde el ingreso propio de cada
+paciente hasta `censusDate`. `censusDate` sigue identificando la cohorte, no se sustituye
+por el fin del rango personalizado. El rango explícito puede incluir antecedentes previos
+al ingreso o resultados posteriores al día censal; no cambia el episodio ni escribe el censo.
+Se valida el mismo rango al crear el trabajo y leer su bandeja, y queda conservado en la
+cola tras un reinicio. Los filtros no borran informes ni revisiones de otros períodos.
+No hay una ventana máxima en días: rigen la disponibilidad de Syslab y el máximo vigente
+de 500 informes por paciente y trabajo; excederlo se informa como fallo, sin truncar resultados.

@@ -36,6 +36,16 @@ const validatePatients = (patients, censusDate) => {
   });
 };
 
+const validateDateRange = range => {
+  if (range === undefined) return undefined;
+  if (!range || typeof range !== 'object' || Array.isArray(range) ||
+      !isoDay(range.from) || !isoDay(range.to) || range.from > range.to) {
+    throw badRequest('Selecciona un período válido: Desde debe ser anterior o igual a Hasta.');
+  }
+  return { from: range.from, to: range.to };
+};
+const queryRange = (input, patient) => input.dateRange || { from: patient.admissionDate, to: input.censusDate };
+
 /** One worker, durable checkpoints, no clinical writes to the census or production Firebase. */
 class LaboratoryJobs {
   constructor({ store, scraper, autoStart = true }) {
@@ -67,7 +77,9 @@ class LaboratoryJobs {
     }
     let payload;
     if (kind === 'census') {
-      payload = { patients: validatePatients(input.patients, input.censusDate), censusDate: input.censusDate, force: input.force === true };
+      const dateRange = validateDateRange(input.dateRange);
+      payload = { patients: validatePatients(input.patients, input.censusDate), censusDate: input.censusDate, force: input.force === true,
+        ...(dateRange ? { dateRange } : {}) };
     } else if (kind === 'details') {
       if (!Array.isArray(input.links) || !input.links.length || input.links.length > 500 ||
           new Set(input.links).size !== input.links.length) throw badRequest('Selección de informes no válida.');
@@ -159,9 +171,14 @@ class LaboratoryJobs {
   censusState(owner, input) {
     assertOwner(owner);
     const patients = validatePatients(input.patients, input.censusDate);
-    const subjects = new Set(patients.map(subjectKey));
-    const admissions = new Map(patients.map(patient => [subjectKey(patient), patient.admissionDate]));
-    const entries = Object.values(this.state.inbox[owner] || {}).filter(entry => subjects.has(entry.subjectKey) && sourceDay(entry.exam.date) >= admissions.get(entry.subjectKey) && sourceDay(entry.exam.date) <= input.censusDate);
+    const dateRange = validateDateRange(input.dateRange);
+    const ranges = new Map(patients.map(patient => [subjectKey(patient), queryRange({ ...input, dateRange }, patient)]));
+    const subjects = new Set(ranges.keys());
+    const entries = Object.values(this.state.inbox[owner] || {}).filter(entry => {
+      const range = ranges.get(entry.subjectKey);
+      const day = sourceDay(entry.exam.date);
+      return range && day >= range.from && day <= range.to;
+    });
     entries.sort((a, b) => b.detectedAt.localeCompare(a.detectedAt) || a.id.localeCompare(b.id));
     const offset = Number.isInteger(input.offset) && input.offset >= 0 ? input.offset : 0;
     const listed = input.onlyUnread ? entries.filter(entry => !entry.reviewedAt) : entries;
@@ -180,7 +197,8 @@ class LaboratoryJobs {
       nextOffset: cursor < listed.length ? cursor : null,
       unread: entries.filter(entry => !entry.reviewedAt).length,
       jobs: Object.values(this.state.jobs).filter(job => job.owner === owner && job.kind === 'census' &&
-        job.payload.censusDate === input.censusDate && job.payload.patients.some(patient => subjects.has(subjectKey(patient))))
+        job.payload.censusDate === input.censusDate &&
+        JSON.stringify(job.payload.dateRange || null) === JSON.stringify(dateRange || null) && job.payload.patients.some(patient => subjects.has(subjectKey(patient))))
         .slice(-20).reverse().map(job => this.get(owner, job.id)),
     };
   }
@@ -250,10 +268,10 @@ class LaboratoryJobs {
       try {
         const response = await this.scraper.getExamsList(patient.rutBody);
         if (!response.success || !Array.isArray(response.data)) throw new Error('Lectura fallida.');
-        const through = this.state.jobs[id].payload.censusDate;
+        const range = queryRange(this.state.jobs[id].payload, patient);
         const exams = response.data.filter(exam => {
           const day = sourceDay(exam.date);
-          return exam.link && day >= patient.admissionDate && day <= through;
+          return exam.link && day >= range.from && day <= range.to;
         });
         if (exams.length > 500) throw new Error('Selección demasiado grande.');
         const references = new Map(exams.map(exam => {
