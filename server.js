@@ -21,6 +21,8 @@ const createApp = () => {
     next();
   });
   app.use(express.json({ limit: '32kb' }));
+  // Process liveness only: recovery must not confuse a Syslab outage with a dead Node process.
+  app.get('/live', (_req, res) => res.json({ success: true, service: 'syslab-scraper' }));
   app.get('/health', async (_req, res) => {
     try {
       const scraper = require('./services/scraperOrchestrator');

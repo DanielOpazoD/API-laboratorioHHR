@@ -10,6 +10,7 @@ Todas las rutas exigen `Authorization: Bearer <SYSLAB_API_TOKEN>`. El servidor e
 defecto en `127.0.0.1:3100`. No expone la interfaz web anterior sin autenticación.
 
 - `GET /health`: inicia sesión en Syslab; `connected:true` acredita esa sesión, no solo un proceso encendido.
+- `GET /live`: comprueba únicamente el proceso, con el mismo Bearer y sin consultar pacientes ni iniciar sesión. Lo usa el supervisor.
 - `GET /api/exams?rut=<cuerpo RUN>`: devuelve `{success,data}` con órdenes y referencias cifradas.
 - `POST /api/exams/details`, JSON `{links:[...]}`: entre 1 y 3 informes de un mismo paciente.
 - `GET /api/exams/pdf?link=<referencia>`: PDF original validado, máximo 4 MiB.
@@ -122,3 +123,70 @@ los logs de LaunchAgent deben supervisarse como cualquier servicio local.
 
 `technical_data_access.md` describe el scraper anterior y es histórico. El contrato vigente
 para instalar y conectar HHR es este README y el código de la versión 2.
+
+## Recuperación de servidor y túnel sin sesión de escritorio
+
+El instalador de servicios reemplaza los dos LaunchAgents por LaunchDaemons del sistema.
+**Los procesos siguen ejecutándose con el usuario habitual, nunca como root.** Arrancan
+cuando el volumen de datos ya está desbloqueado; no requieren entrar al escritorio.
+Mantiene FileVault, las credenciales locales, el dominio y el acceso exclusivamente por
+loopback. No crea contraseñas, inicio automático de usuario ni accesos públicos SSH.
+
+Con el código actualizado en `~/HHR-laboratorio` y las dependencias/navegador instalados:
+
+```sh
+cd "$HOME/HHR-laboratorio"
+node scripts/install-mac-services.js --prepare
+sudo "$(command -v node)" scripts/install-mac-services.js
+```
+
+`--prepare` valida los plists sin instalar ni cambiar energía. El segundo comando exige
+la autorización normal de administrador. Instala `/Library/LaunchDaemons/cl.hhr.syslab.plist`
+y `cl.hhr.syslab-tunnel.plist`, conserva una copia de los agentes anteriores en `logs/`,
+y activa `pmset -a autorestart 1` (encendido tras un corte inesperado). Un apagado manual
+no es un corte de luz y este ajuste no garantiza encendido después de apagar normalmente.
+No cambia suspensión global ni FileVault. Si falla, retira las definiciones nuevas e intenta
+restaurar las anteriores; comprueba siempre los estados antes de reiniciar.
+
+La supervisión se ejecuta cada 30 segundos, sin checks simultáneos. Usa `/live` autenticado:
+un fallo de sesión Syslab no se confunde con un proceso muerto. Deja 60 segundos de gracia;
+tras tres fallos consecutivos del servidor o seis del túnel termina el proceso afectado y
+lo vuelve a iniciar. Ngrok conserva también su reconexión nativa durante cortes breves.
+Si el servidor local está caído no reinicia el túnel, y una respuesta 401/403 pide revisar
+credenciales sin entrar en un bucle. Nunca repite consultas clínicas ni descarga informes.
+
+Hay como máximo tres arranques por componente en una ventana de 15 minutos; el presupuesto
+se conserva en `logs/recovery-server.json` y `recovery-tunnel.json` con permisos 600, incluso
+si muere el supervisor. Una vez consumido, espera hasta que haya cupo. Los estados contienen
+solo PIDs, tiempos y códigos operativos. Los logs operativos rotan; se descarta la salida
+cruda de ngrok y los procesos hijos. Reiniciar Node/ngrok manualmente sin supervisión
+no debe convivir con estos servicios: duplicaría procesos sobre los mismos puertos.
+
+```sh
+launchctl print system/cl.hhr.syslab
+launchctl print system/cl.hhr.syslab-tunnel
+cat logs/recovery-server.json
+cat logs/recovery-tunnel.json
+npm run check:syslab
+```
+
+### FileVault y recuperación tras un arranque en frío
+
+El disco **debe desbloquearse**: el propio túnel no puede arrancar antes de que sus archivos
+estén disponibles. En Apple silicon con macOS 26 o posterior, Remote Login permite ese
+desbloqueo por SSH mediante la contraseña de un usuario autorizado. Después del desbloqueo
+la conexión SSH se cierra brevemente y macOS inicia sus servicios. No hace falta iniciar
+una sesión gráfica para los LaunchDaemons. Referencias de Apple:
+[FileVault y SSH](https://support.apple.com/guide/security/sec8447f5049/web),
+[manual OpenSSH](https://github.com/apple-oss-distributions/OpenSSH/blob/main/apple_ssh_and_filevault.7).
+
+Se necesita conectividad independiente hasta la red del Mac: una VPN que dependa del
+propio Mini o ngrok no sirven mientras su disco siga bloqueado. Desde otro equipo con
+acceso directo o una VPN independiente: `ssh tu_usuario@ip_del_mini`. No publiques SSH
+en Internet ni desactives FileVault. Para automatizar también ese desbloqueo se necesita
+un segundo equipo disponible y una decisión explícita sobre custodia de credenciales.
+Este instalador no guarda la contraseña de macOS ni la clave de recuperación.
+
+Antes de una prueba real de reinicio, verifica el canal de desbloqueo y la posibilidad de
+recuperar acceso. Las pruebas de procesos y portal ficticio no acreditan un arranque real
+con FileVault bloqueado. Un UPS reduce cortes; el software no sustituye electricidad y red.
