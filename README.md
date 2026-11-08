@@ -1,5 +1,36 @@
 # Puente de laboratorio Syslab para HHR
 
+## Exalab SSMO por sesión personal
+
+El mismo servicio incorpora `/api/exalab` sin cambiar el contrato de Syslab. Todas
+sus rutas conservan el Bearer privado del puente. El gateway HHR autoriza Firebase
+y envía `X-HHR-Lab-Owner`, derivado del proyecto, UID y hospital verificados.
+
+- `POST /api/exalab/pair`: capacidad aleatoria de cinco minutos, un solo uso.
+- `POST /api/exalab/session/connect` `{pair,session}`: vincula las cookies mínimas
+  de Exalab después de comprobar el buscador autenticado; el propietario proviene
+  de la capacidad, no de este cuerpo ni de una cabecera elegida por el navegador.
+- `GET /api/exalab/session` y `DELETE /api/exalab/session`: comprueba o desconecta
+  exclusivamente la sesión del operador.
+- `POST /api/exalab/search` `{rut,from,to}`: RUT completo con DV y fechas de informe
+  Exalab AAAA-MM-DD. Devuelve folios, centro y referencias cifradas.
+- `GET /api/exalab/pdf?link=...`: PDF original de hasta 4 MiB, con RUT verificado.
+
+La vinculación se inicia desde HHR en Chrome del Mac mini, usando la página de
+consentimiento de la extensión. No se automatiza ClaveÚnica ni se almacenan sus
+contraseñas. Las sesiones permanecen solo en memoria, aisladas por operador,
+durante una hora sin uso y un máximo de ocho horas; Exalab puede vencerlas antes.
+Reiniciar requiere reconectar. Las referencias de PDF vencen en 30 minutos y se
+invalidan al desconectar o sustituir la sesión. Las lecturas de un operador se
+serializan para evitar mezclar respuestas del generador de informes.
+
+Solo se visita `https://exalab.saludoriente.cl/web_ssmo/`, conservando TLS y
+rechazando redirecciones. Las URL internas de los centros son parámetros del
+portal y nunca se visitan. El HTML se analiza con Chromium sin JavaScript ni
+acceso de red. Se comprueba paciente en lista y PDF, y se distingue una tabla
+vacía autenticada de una sesión vencida o respuesta desconocida. Los errores no
+incluyen respuestas, credenciales ni excepciones crudas. No se guardan PDF.
+
 Servidor local Node.js/Express/Playwright. Se instala en el Mac mini que puede acceder a
 Syslab y a Internet. HHR en Netlify autentica al profesional con Firebase y consulta este
 servidor por un túnel HTTPS. No requiere Google Cloud ni abrir puertos en el router.
