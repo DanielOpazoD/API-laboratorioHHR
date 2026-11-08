@@ -37,6 +37,8 @@ const search = () => service.search(owner, { rut, from: '2026-11-01', to: '2026-
 test('returns source-labelled exams and verifies an original PDF without visiting internal source URLs', async () => {
   const pair = service.pair(owner).pair;
   await service.connect(pair, session);
+  expect(transport.mock.calls[0][1].headers).toMatchObject({ 'User-Agent': 'Synthetic Browser', Cookie: 'PHPSESSID=synthetic-session' });
+  expect(transport.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
   await expect(service.connect(pair, session)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
   const exams = await search();
   expect(exams).toMatchObject([{ id: '123', rut, laboratory: 'CENTRO SINTETICO', date: '2026-11-08', time: '12:34:56' }]);

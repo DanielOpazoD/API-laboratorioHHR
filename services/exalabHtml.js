@@ -5,7 +5,7 @@ class ExalabError extends Error {
   constructor(code, message, status = 502) { super(message); this.code = code; this.status = status; }
 }
 const changed = () => new ExalabError('SOURCE_CHANGED', 'No se pudo verificar la respuesta de Exalab. Abre el visor original.');
-const expired = () => new ExalabError('SESSION_REQUIRED', 'Conecta o renueva tu sesión personal de Exalab desde Chrome del Mac mini.', 409);
+const expired = () => new ExalabError('SESSION_REQUIRED', 'Conecta o renueva tu sesión personal de Exalab desde HHR con la extensión activada.', 409);
 const normalizeRut = value => {
   const rut = typeof value === 'string' ? value.trim().replace(/\./g, '').toUpperCase() : '';
   const match = /^(\d{7,8})-([0-9K])$/.exec(rut);

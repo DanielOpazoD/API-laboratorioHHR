@@ -16,8 +16,10 @@ y envía `X-HHR-Lab-Owner`, derivado del proyecto, UID y hospital verificados.
   Exalab AAAA-MM-DD. Devuelve folios, centro y referencias cifradas.
 - `GET /api/exalab/pdf?link=...`: PDF original de hasta 4 MiB, con RUT verificado.
 
-La vinculación se inicia desde HHR en Chrome del Mac mini, usando la página de
-consentimiento de la extensión. No se automatiza ClaveÚnica ni se almacenan sus
+El alcance inicial es PC con HHR y la extensión activada. La vinculación se inicia
+desde HHR en Chrome de ese PC, usando la página de consentimiento de la extensión.
+El Mac mini comprueba la sesión antes de aceptarla y realiza las consultas y las
+descargas por HTTPS. No se automatiza ClaveÚnica ni se almacenan sus
 contraseñas. Las sesiones permanecen solo en memoria, aisladas por operador,
 durante una hora sin uso y un máximo de ocho horas; Exalab puede vencerlas antes.
 Reiniciar requiere reconectar. Las referencias de PDF vencen en 30 minutos y se
