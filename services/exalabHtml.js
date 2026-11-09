@@ -38,6 +38,27 @@ const validateSource = (value, folio) => {
   return value;
 };
 
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const decodeEntities = text => text
+  .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+  .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+  .replace(/&([a-z]+);/gi, (match, name) => ENTITIES[name.toLowerCase()] ??
+    (/^([a-z])(acute|grave|tilde|uml|circ)$/i.test(name) ? name[0] : match));
+/**
+ * Name of the signed-in Exalab user from the account menu of web_ssmo/index.php: the dropdown toggle
+ * that carries a user icon, e.g. «👤 Nombre Apellido ( ) ▾». Null unless exactly one plausible name
+ * is found, so callers fail closed. The name never leaves the bridge.
+ */
+const exalabUserName = html => {
+  const toggles = [...String(html).matchAll(/<(a|button)\b([^>]*)>([\s\S]*?)<\/\1>/gi)]
+    .filter(([, , attributes, inner]) => /\bclass=["'][^"']*\bdropdown-toggle\b/i.test(attributes) &&
+      /\b(?:glyphicon-user|fa-user|bi-person|icon-user)\b/i.test(inner));
+  const names = toggles.map(([, , , inner]) => decodeEntities(inner.replace(/<[^>]*>/g, ' '))
+    .replace(/\(\s*[^()]*\)\s*$/, '').replace(/\s+/g, ' ').trim())
+    .filter(name => name.length <= 120 && /^[\p{L}][\p{L}'.-]*(?: [\p{L}][\p{L}'.-]*)+$/u.test(name));
+  return names.length === 1 ? names[0] : null;
+};
+
 class ExalabHtml {
   async document(html, operation) {
     this.browserPromise ||= chromium.launch({ headless: true });
@@ -93,4 +114,4 @@ class ExalabHtml {
   }
   async close() { if (this.browserPromise) await (await this.browserPromise).close(); this.browserPromise = null; }
 }
-module.exports = { BASE, ExalabError, ExalabHtml, normalizeRut, validDate, validateSource, changed, expired };
+module.exports = { BASE, ExalabError, ExalabHtml, exalabUserName, normalizeRut, validDate, validateSource, changed, expired };
