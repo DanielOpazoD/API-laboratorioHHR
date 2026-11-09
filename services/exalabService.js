@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const nodePath = require('node:path');
 const { PDFParse } = require('pdf-parse');
 const config = require('../config/env');
-const { BASE, ExalabError, ExalabHtml, normalizeRut, validDate, validateSource, changed, expired } = require('./exalabHtml');
+const { BASE, ExalabError, ExalabHtml, exalabUserName, normalizeRut, validDate, validateSource, changed, expired } = require('./exalabHtml');
 const PREFIX = 'hhr-exalab://report/';
 const MAX_PDF = 4 * 1024 * 1024;
 const SESSION_TTL = 60 * 60_000;
@@ -16,6 +16,10 @@ const PAIR_TTL = 5 * 60_000;
 const digest = value => createHash('sha256').update(value).digest('hex');
 /** Short, non-reversible name of the HHR account a session belongs to (shared with the extension). */
 const ownerFingerprint = owner => digest('exalab-owner:' + owner).slice(0, 16);
+/** Short fingerprint of the Exalab user (normalized display name); the name itself is never returned or logged. */
+const exalabUserFingerprint = name => name
+  ? digest('exalab-user:' + name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim()).slice(0, 16)
+  : null;
 const assertOwner = owner => {
   if (!/^[a-f0-9]{64}$/.test(owner || '')) throw new ExalabError('OWNER_REQUIRED', 'Sesión de operador requerida.', 401);
 };
@@ -139,7 +143,7 @@ class ExalabService {
     this.pairs.set(digest(pair), binding); this.bindings.set(owner, binding);
     return { pair, expiresAt: Date.now() + PAIR_TTL };
   }
-  async connect(pair, input, expectedOwner) {
+  async connect(pair, input, expectedOwner, expectedExalabUser) {
     this.prune();
     if (typeof pair !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(pair)) throw expired();
     const binding = this.pairs.get(digest(pair));
@@ -151,14 +155,19 @@ class ExalabService {
       throw new ExalabError('OWNER_MISMATCH', 'Esta sesión de Exalab se autorizó para otra cuenta HHR. Conéctala de nuevo desde HHR.', 403);
     }
     const session = normalizeSession(input);
-    await this.preflight(session);
+    const exalabUser = exalabUserFingerprint(exalabUserName(await this.preflight(session)));
+    // A silent reconnection also names the Exalab user who consented: on a shared PC, another person's
+    // Exalab login must not be bound to this HHR account. An unrecognizable page fails closed.
+    if (expectedExalabUser !== undefined && (!exalabUser || expectedExalabUser !== exalabUser)) {
+      throw new ExalabError('EXALAB_USER_MISMATCH', 'La sesión de Exalab abierta es de otra persona. Conéctala de nuevo desde HHR.', 403);
+    }
     // A newer pairing supersedes any connection attempt still in flight.
     if (this.bindings.get(binding.owner) !== binding || binding.expires <= Date.now()) throw expired();
     if (!this.sessions.has(binding.owner) && this.sessions.size >= 100) throw new ExalabError('BUSY', 'Intenta conectar Exalab más tarde.', 503);
     this.sessions.set(binding.owner, session);
     this.bindings.delete(binding.owner);
     this.persist();
-    return { connected: true, expiresAt: session.created + MAX_SESSION_AGE, owner: ownerFingerprint(binding.owner) };
+    return { connected: true, expiresAt: session.created + MAX_SESSION_AGE, owner: ownerFingerprint(binding.owner), ...(exalabUser ? { exalabUser } : {}) };
   }
   disconnect(owner) {
     assertOwner(owner);
@@ -243,6 +252,7 @@ class ExalabService {
   async preflight(session) {
     const html = await this.request(session, 'index.php');
     if (!/\bid=['"]rut['"]/.test(html)) throw expired();
+    return html;
   }
   async status(owner) {
     return this.withSession(owner, async session => {
@@ -294,4 +304,4 @@ class ExalabService {
   }
   async close() { clearInterval(this.keepAliveTimer); this.sessions.clear(); this.pairs.clear(); this.bindings.clear(); await this.html.close?.(); }
 }
-module.exports = { ExalabService, ownerFingerprint, assertPdfPatient, normalizeSession, MAX_PDF, MAX_SESSION_AGE, KEEP_ALIVE_MS, DEFAULT_STATE_FILE };
+module.exports = { ExalabService, ownerFingerprint, exalabUserFingerprint, assertPdfPatient, normalizeSession, MAX_PDF, MAX_SESSION_AGE, KEEP_ALIVE_MS, DEFAULT_STATE_FILE };

@@ -2,8 +2,8 @@ const config = require('../config/env');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ExalabService, ownerFingerprint, assertPdfPatient, MAX_SESSION_AGE } = require('../services/exalabService');
-const { ExalabHtml } = require('../services/exalabHtml');
+const { ExalabService, ownerFingerprint, exalabUserFingerprint, assertPdfPatient, MAX_SESSION_AGE } = require('../services/exalabService');
+const { ExalabHtml, exalabUserName } = require('../services/exalabHtml');
 const owner = 'a'.repeat(64), other = 'b'.repeat(64);
 const rut = '12345678-5';
 const session = { cookies: [{ name: 'PHPSESSID', value: 'synthetic-session', domain: 'exalab.saludoriente.cl' }], userAgent: 'Synthetic Browser' };
@@ -20,12 +20,12 @@ const pdf = identity => {
   const xref = Buffer.byteLength(content);
   return Buffer.from(content + 'xref\n0 6\n0000000000 65535 f \n' + offsets.map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 };
-let service, transport, list, original;
+let service, transport, list, original, home;
 beforeEach(() => {
-  config.apiToken = 'synthetic'.repeat(8); list = header + row() + '</table>'; original = pdf(rut);
+  config.apiToken = 'synthetic'.repeat(8); list = header + row() + '</table>'; original = pdf(rut); home = '<h1>Consulta Exámenes</h1><input id="rut">';
   transport = jest.fn(async url => {
     if (!url.startsWith('https://exalab.saludoriente.cl/web_ssmo/')) throw new Error('forbidden destination');
-    if (url.endsWith('index.php')) return new Response('<h1>Consulta Exámenes</h1><input id="rut">');
+    if (url.endsWith('index.php')) return new Response(home);
     if (url.endsWith('consulta.php')) return new Response(list);
     if (url.endsWith('ventana.php')) return new Response('<object data="pdf/synthetic.pdf"></object>');
     if (url.endsWith('/pdf/synthetic.pdf')) return new Response(original, { headers: { 'Content-Type': 'application/pdf' } });
@@ -90,6 +90,44 @@ test('a silent reconnection binds the session only to the HHR account that conse
   await expect(service.connect(foreign, session)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
   // The manual consent path, without expectedOwner, keeps working and reports the fingerprint.
   await expect(service.connect(service.pair(other).pair, session)).resolves.toMatchObject({ owner: ownerFingerprint(other) });
+});
+
+const menu = (name, icon = '<span class="glyphicon glyphicon-user"></span>') =>
+  `<li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button">${icon} ${name} ( ) <span class="caret"></span></a>` +
+  '<ul class="dropdown-menu"><li><a href="logout.php">Salir</a></li></ul></li>';
+test('reads the signed-in Exalab user only from a single account menu, failing closed', () => {
+  expect(exalabUserName(menu('Persona Sint&eacute;tica Uno') + '<input id="rut">')).toBe('Persona Sintetica Uno');
+  expect(exalabUserName('<button type="button" class="btn btn-default dropdown-toggle"><i class="fa fa-user"></i> Persona Dos (Médico)</button>')).toBe('Persona Dos');
+  expect(exalabUserName('<input id="rut">')).toBeNull();
+  expect(exalabUserName(menu('Persona Sintetica Uno', ''))).toBeNull();
+  expect(exalabUserName(menu('Persona Uno') + menu('Persona Dos'))).toBeNull();
+  expect(exalabUserName(menu('<script>x</script>'))).toBeNull();
+  expect(exalabUserFingerprint('Persona Sintética  Uno')).toBe(exalabUserFingerprint('PERSONA SINTETICA UNO'));
+  expect(exalabUserFingerprint('Persona Sintetica Uno')).toMatch(/^[a-f0-9]{16}$/);
+  expect(exalabUserFingerprint(null)).toBeNull();
+});
+
+test('a silent reconnection binds only the Exalab user who consented', async () => {
+  home = menu('Persona Sintetica Uno') + '<input id="rut">';
+  const user = exalabUserFingerprint('Persona Sintetica Uno');
+  // Manual consent reports the fingerprint, never the name.
+  const consented = await service.connect(service.pair(owner).pair, session);
+  expect(consented).toMatchObject({ connected: true, exalabUser: user });
+  expect(JSON.stringify(consented)).not.toContain('Persona');
+  await expect(service.connect(service.pair(owner).pair, session, ownerFingerprint(owner), user)).resolves.toMatchObject({ exalabUser: user });
+  // Another person signed in to Exalab on the same PC: refused, pair consumed, session not stored.
+  service.disconnect(owner);
+  home = menu('Otra Persona Sintetica') + '<input id="rut">';
+  const foreign = service.pair(owner).pair;
+  await expect(service.connect(foreign, session, ownerFingerprint(owner), user)).rejects.toMatchObject({ code: 'EXALAB_USER_MISMATCH', status: 403 });
+  await expect(service.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+  await expect(service.connect(foreign, session)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+  // An unrecognizable page fails closed for silent reconnection only.
+  home = '<input id="rut">';
+  await expect(service.connect(service.pair(owner).pair, session, ownerFingerprint(owner), user)).rejects.toMatchObject({ code: 'EXALAB_USER_MISMATCH' });
+  const manual = await service.connect(service.pair(owner).pair, session);
+  expect(manual).toMatchObject({ connected: true });
+  expect(manual).not.toHaveProperty('exalabUser');
 });
 
 test('disconnect and newer pairings invalidate an in-flight connection', async () => {
