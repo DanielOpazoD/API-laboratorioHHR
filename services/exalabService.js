@@ -14,6 +14,8 @@ const DEFAULT_STATE_FILE = nodePath.join(process.env.SYSLAB_STATE_DIR || nodePat
 const stateKey = () => createHash('sha256').update('exalab-sessions:' + config.apiToken).digest();
 const PAIR_TTL = 5 * 60_000;
 const digest = value => createHash('sha256').update(value).digest('hex');
+/** Short, non-reversible name of the HHR account a session belongs to (shared with the extension). */
+const ownerFingerprint = owner => digest('exalab-owner:' + owner).slice(0, 16);
 const assertOwner = owner => {
   if (!/^[a-f0-9]{64}$/.test(owner || '')) throw new ExalabError('OWNER_REQUIRED', 'Sesión de operador requerida.', 401);
 };
@@ -137,12 +139,17 @@ class ExalabService {
     this.pairs.set(digest(pair), binding); this.bindings.set(owner, binding);
     return { pair, expiresAt: Date.now() + PAIR_TTL };
   }
-  async connect(pair, input) {
+  async connect(pair, input, expectedOwner) {
     this.prune();
     if (typeof pair !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(pair)) throw expired();
     const binding = this.pairs.get(digest(pair));
     if (!binding) throw expired();
     this.pairs.delete(digest(pair));
+    // A silent reconnection names the HHR account that consented; a pair minted for another account
+    // (e.g. injected into a compromised page) is consumed and never receives this session.
+    if (expectedOwner !== undefined && expectedOwner !== ownerFingerprint(binding.owner)) {
+      throw new ExalabError('OWNER_MISMATCH', 'Esta sesión de Exalab se autorizó para otra cuenta HHR. Conéctala de nuevo desde HHR.', 403);
+    }
     const session = normalizeSession(input);
     await this.preflight(session);
     // A newer pairing supersedes any connection attempt still in flight.
@@ -151,7 +158,7 @@ class ExalabService {
     this.sessions.set(binding.owner, session);
     this.bindings.delete(binding.owner);
     this.persist();
-    return { connected: true, expiresAt: session.created + MAX_SESSION_AGE };
+    return { connected: true, expiresAt: session.created + MAX_SESSION_AGE, owner: ownerFingerprint(binding.owner) };
   }
   disconnect(owner) {
     assertOwner(owner);
@@ -287,4 +294,4 @@ class ExalabService {
   }
   async close() { clearInterval(this.keepAliveTimer); this.sessions.clear(); this.pairs.clear(); this.bindings.clear(); await this.html.close?.(); }
 }
-module.exports = { ExalabService, assertPdfPatient, normalizeSession, MAX_PDF, MAX_SESSION_AGE, KEEP_ALIVE_MS, DEFAULT_STATE_FILE };
+module.exports = { ExalabService, ownerFingerprint, assertPdfPatient, normalizeSession, MAX_PDF, MAX_SESSION_AGE, KEEP_ALIVE_MS, DEFAULT_STATE_FILE };

@@ -15,7 +15,7 @@ const createExalabRoutes = (getService = () => (service ||= new ExalabService({ 
   };
   const owner = req => req.get('X-HHR-Lab-Owner');
   router.post('/pair', route(async (svc, req, res) => res.json({ success: true, ...svc.pair(owner(req)) })));
-  router.post('/session/connect', route(async (svc, req, res) => res.json({ success: true, ...await svc.connect(req.body?.pair, req.body?.session) })));
+  router.post('/session/connect', route(async (svc, req, res) => res.json({ success: true, ...await svc.connect(req.body?.pair, req.body?.session, req.body?.expectedOwner) })));
   router.get('/session', route(async (svc, req, res) => res.json({ success: true, ...await svc.status(owner(req)) })));
   router.delete('/session', route(async (svc, req, res) => res.json({ success: true, ...svc.disconnect(owner(req)) })));
   router.post('/search', route(async (svc, req, res) => res.json({ success: true, data: await svc.search(owner(req), req.body) })));
