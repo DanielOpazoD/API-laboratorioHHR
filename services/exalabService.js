@@ -15,11 +15,18 @@ const readPdfText = async buffer => {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   try { return (await parser.getText()).text; } finally { await parser.destroy(); }
 };
+// Hospital del Salvador reports print «IDENTIFICACION : 6.321.880-4», with no RUT label, and the
+// extracted text may not keep the value next to its label. Every complete RUT in the PDF (valid check
+// digit) must be the patient's; a labelled RUT without check digit must match its number.
+const fullRuts = text => [...String(text).matchAll(/(?<![\d.])(\d{1,2}(?:\.?\d{3}){2})\s*-\s*([\dKk])(?![\w])/g)]
+  .map(match => { try { return normalizeRut(match[1] + '-' + match[2]); } catch { return null; } })
+  .filter(Boolean);
 const assertPdfPatient = (text, rut) => {
-  const labels = [...String(text).matchAll(/\b(?:RUT(?:\s*\/\s*FIC)?|RUN)\s*:?\s*([\d.]+)(?:\s*-\s*([\dKk]))?\b/gi)];
-  if (!labels.length || labels.some(match => match[2]
-    ? normalizeRut(match[1] + '-' + match[2]) !== rut
-    : match[1].replace(/\./g, '') !== rut.split('-')[0])) {
+  const ruts = fullRuts(text);
+  const labels = [...String(text).matchAll(/\b(?:RUT(?:\s*\/\s*FIC)?|RUN)\s*:?\s*([\d.]+)(\s*-\s*[\dKk])?/gi)]
+    .filter(match => !match[2]).map(match => match[1].replace(/\./g, ''));
+  if ((!ruts.length && !labels.length) || ruts.some(found => found !== rut) ||
+      labels.some(number => number !== rut.split('-')[0])) {
     throw new ExalabError('PATIENT_MISMATCH', 'El PDF no permite verificar el RUT solicitado. Revísalo en Exalab.');
   }
 };
