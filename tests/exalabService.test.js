@@ -2,7 +2,7 @@ const config = require('../config/env');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ExalabService, assertPdfPatient, MAX_SESSION_AGE } = require('../services/exalabService');
+const { ExalabService, ownerFingerprint, assertPdfPatient, MAX_SESSION_AGE } = require('../services/exalabService');
 const { ExalabHtml } = require('../services/exalabHtml');
 const owner = 'a'.repeat(64), other = 'b'.repeat(64);
 const rut = '12345678-5';
@@ -74,6 +74,22 @@ test('expired authentication is never a successful empty search and errors conta
   await expect(service.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
   transport.mockRejectedValueOnce(new Error('synthetic-session password secret'));
   await expect(connect()).rejects.toMatchObject({ code: 'SOURCE_UNAVAILABLE', message: expect.not.stringContaining('password') });
+});
+
+test('a silent reconnection binds the session only to the HHR account that consented', async () => {
+  const connected = await service.connect(service.pair(owner).pair, session, ownerFingerprint(owner));
+  expect(connected).toMatchObject({ connected: true, owner: ownerFingerprint(owner) });
+  expect(ownerFingerprint(owner)).toMatch(/^[a-f0-9]{16}$/);
+  expect(ownerFingerprint(owner)).not.toBe(ownerFingerprint(other));
+  // A pair minted for another account (e.g. injected into a compromised page) is refused and consumed.
+  const foreign = service.pair(other).pair;
+  transport.mockClear();
+  await expect(service.connect(foreign, session, ownerFingerprint(owner))).rejects.toMatchObject({ code: 'OWNER_MISMATCH', status: 403 });
+  expect(transport).not.toHaveBeenCalled();
+  await expect(service.status(other)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+  await expect(service.connect(foreign, session)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+  // The manual consent path, without expectedOwner, keeps working and reports the fingerprint.
+  await expect(service.connect(service.pair(other).pair, session)).resolves.toMatchObject({ owner: ownerFingerprint(other) });
 });
 
 test('disconnect and newer pairings invalidate an in-flight connection', async () => {
