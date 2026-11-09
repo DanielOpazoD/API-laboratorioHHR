@@ -100,4 +100,9 @@ test('invalid RUTs, ranges, cookie domains and unverifiable PDFs fail before cli
   expect(() => assertPdfPatient('IDENTIFICACION : 11.111.111-1', rut)).toThrow();
   expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-5\nIDENTIFICACION : 11.111.111-1', rut)).toThrow();
   expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-5\nRut/Fic: 11.111.111', rut)).toThrow();
+  // Fail closed: an invalid check digit, letters glued to a RUT or another number by an identity label.
+  expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-5\nRUT: 11.111.111-2', rut)).toThrow();
+  expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-5\n11.111.111-1ABC', rut)).toThrow();
+  expect(() => assertPdfPatient('12.345.678-5\nIDENTIFICACION : 11111111', rut)).toThrow();
+  expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-0', rut)).toThrow();
 });

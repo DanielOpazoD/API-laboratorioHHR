@@ -16,17 +16,16 @@ const readPdfText = async buffer => {
   try { return (await parser.getText()).text; } finally { await parser.destroy(); }
 };
 // Hospital del Salvador reports print «IDENTIFICACION : 6.321.880-4», with no RUT label, and the
-// extracted text may not keep the value next to its label. Every complete RUT in the PDF (valid check
-// digit) must be the patient's; a labelled RUT without check digit must match its number.
-const fullRuts = text => [...String(text).matchAll(/(?<![\d.])(\d{1,2}(?:\.?\d{3}){2})\s*-\s*([\dKk])(?![\w])/g)]
-  .map(match => { try { return normalizeRut(match[1] + '-' + match[2]); } catch { return null; } })
-  .filter(Boolean);
+// extracted text may not keep the value next to its label. Fail closed: every RUT-shaped token in the
+// PDF, and every number next to an identity label, must be the patient's (check digit included).
+const RUT_TOKEN = /(?<![\d.])(\d{1,2}(?:\.?\d{3}){2})\s*-\s*([\dKk])/g;
+const IDENTITY_LABEL = /\b(?:RUT(?:\s*\/\s*FIC)?|RUN|IDENTIFICACI[OÓ]N)\s*:?\s*(\d[\d.]*)(?:\s*-\s*([\dKk]))?/gi;
 const assertPdfPatient = (text, rut) => {
-  const ruts = fullRuts(text);
-  const labels = [...String(text).matchAll(/\b(?:RUT(?:\s*\/\s*FIC)?|RUN)\s*:?\s*([\d.]+)(\s*-\s*[\dKk])?/gi)]
-    .filter(match => !match[2]).map(match => match[1].replace(/\./g, ''));
-  if ((!ruts.length && !labels.length) || ruts.some(found => found !== rut) ||
-      labels.some(number => number !== rut.split('-')[0])) {
+  const [number, check] = rut.split('-');
+  const read = regex => [...String(text).matchAll(regex)]
+    .map(match => ({ number: match[1].replace(/\./g, ''), check: match[2]?.toUpperCase() }));
+  const found = [...read(RUT_TOKEN), ...read(IDENTITY_LABEL)];
+  if (!found.length || found.some(id => id.number !== number || (id.check && id.check !== check))) {
     throw new ExalabError('PATIENT_MISMATCH', 'El PDF no permite verificar el RUT solicitado. Revísalo en Exalab.');
   }
 };
