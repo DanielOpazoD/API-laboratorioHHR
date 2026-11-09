@@ -1,5 +1,8 @@
 const config = require('../config/env');
-const { ExalabService, assertPdfPatient } = require('../services/exalabService');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { ExalabService, assertPdfPatient, MAX_SESSION_AGE } = require('../services/exalabService');
 const { ExalabHtml } = require('../services/exalabHtml');
 const owner = 'a'.repeat(64), other = 'b'.repeat(64);
 const rut = '12345678-5';
@@ -84,7 +87,7 @@ test('disconnect and newer pairings invalidate an in-flight connection', async (
   await service.connect(newest, session);
   release(new Response('<input id="rut">'));
   await expect(older).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
-  await expect(service.status(owner)).resolves.toEqual({ connected: true });
+  await expect(service.status(owner)).resolves.toMatchObject({ connected: true, expiresAt: expect.any(Number) });
 });
 
 test('invalid RUTs, ranges, cookie domains and unverifiable PDFs fail before clinical access', async () => {
@@ -105,4 +108,112 @@ test('invalid RUTs, ranges, cookie domains and unverifiable PDFs fail before cli
   expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-5\n11.111.111-1ABC', rut)).toThrow();
   expect(() => assertPdfPatient('12.345.678-5\nIDENTIFICACION : 11111111', rut)).toThrow();
   expect(() => assertPdfPatient('IDENTIFICACION : 12.345.678-0', rut)).toThrow();
+});
+
+describe('connected sessions survive restarts and stay alive', () => {
+  let directory, stateFile;
+  const restart = (options = {}) => new ExalabService({ fetchImpl: transport, stateFile, ...options });
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'exalab-state-'));
+    stateFile = path.join(directory, 'exalab-sessions.bin');
+  });
+  afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); jest.useRealTimers(); });
+
+  test('a restarted bridge resumes the sealed session; the file never holds plaintext cookies', async () => {
+    const first = restart();
+    const connected = await first.connect(first.pair(owner).pair, session);
+    expect(connected).toMatchObject({ connected: true });
+    expect(connected.expiresAt - Date.now()).toBeLessThanOrEqual(MAX_SESSION_AGE);
+    expect((fs.statSync(stateFile).mode & 0o777).toString(8)).toBe('600');
+    const sealed = fs.readFileSync(stateFile);
+    expect(sealed.includes(Buffer.from('synthetic-session'))).toBe(false);
+    expect(sealed.includes(Buffer.from('Synthetic Browser'))).toBe(false);
+    await first.close();
+    const second = restart();
+    await expect(second.status(owner)).resolves.toMatchObject({ connected: true });
+    expect(transport.mock.calls.at(-1)[1].headers).toMatchObject({ Cookie: 'PHPSESSID=synthetic-session', 'User-Agent': 'Synthetic Browser' });
+    await second.close();
+  });
+
+  test('a corrupt or foreign file starts empty without crashing', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    fs.writeFileSync(stateFile, 'not a sealed file');
+    const restored = restart();
+    await expect(restored.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(String(console.warn.mock.calls[0][0])).not.toContain('not a sealed file');
+    await restored.close();
+  });
+
+  test('disconnecting removes the session from disk', async () => {
+    const first = restart();
+    await first.connect(first.pair(owner).pair, session);
+    expect(fs.existsSync(stateFile)).toBe(true);
+    first.disconnect(owner);
+    expect(fs.existsSync(stateFile)).toBe(false);
+    await first.close();
+    const second = restart();
+    await expect(second.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+    await second.close();
+  });
+
+  test('keep-alive drops a session Exalab ended and keeps one behind a network failure', async () => {
+    const live = restart({ keepAliveMs: 10 * 60_000 });
+    await live.connect(live.pair(owner).pair, session);
+    await live.connect(live.pair(other).pair, session);
+    transport.mockImplementation(async (url, init) => {
+      if (init.headers.Cookie === 'PHPSESSID=synthetic-session' && url.endsWith('index.php')) throw new Error('network down');
+      return new Response('');
+    });
+    await live.keepAlive(Date.now() + 10 * 60_000);
+    expect(live.sessions.has(owner)).toBe(true);
+    expect(live.sessions.has(other)).toBe(true);
+    // Same cookie for both owners in this synthetic setup: make only one of them end.
+    live.sessions.get(other).cookies.set('PHPSESSID', 'ended-session');
+    transport.mockImplementation(async (url, init) =>
+      init.headers.Cookie === 'PHPSESSID=ended-session' ? new Response('<h1>Iniciar sesión con ClaveÚnica</h1>') : new Response('<input id="rut">'));
+    await live.keepAlive(Date.now() + 10 * 60_000);
+    expect(live.sessions.has(other)).toBe(false);
+    expect(live.sessions.has(owner)).toBe(true);
+    await live.close();
+    const restored = restart();
+    expect(restored.sessions.has(other)).toBe(false);
+    expect(restored.sessions.has(owner)).toBe(true);
+    await restored.close();
+  });
+
+  test('a session Exalab ended during a request is gone after a restart', async () => {
+    const first = restart();
+    await first.connect(first.pair(owner).pair, session);
+    transport.mockImplementation(async () => new Response('<h1>Iniciar sesión con ClaveÚnica</h1>'));
+    await expect(first.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+    await first.close();
+    expect(fs.existsSync(stateFile)).toBe(false);
+  });
+
+  test('rotated cookies are persisted for the next restart', async () => {
+    const first = restart();
+    await first.connect(first.pair(owner).pair, session);
+    transport.mockImplementation(async () => new Response('<input id="rut">', { headers: { 'Set-Cookie': 'PHPSESSID=rotated-session; path=/' } }));
+    await first.status(owner);
+    await first.close();
+    const second = restart();
+    expect(second.sessions.get(owner).cookies.get('PHPSESSID')).toBe('rotated-session');
+    await second.close();
+  });
+
+  test('keep-alive never extends the absolute session age', async () => {
+    const first = restart({ keepAliveMs: 10 * 60_000 });
+    await first.connect(first.pair(owner).pair, session);
+    const created = first.sessions.get(owner).created;
+    jest.spyOn(Date, 'now').mockReturnValue(created + MAX_SESSION_AGE - 1);
+    first.sessions.get(owner).touched = created + MAX_SESSION_AGE - 20 * 60_000;
+    await first.keepAlive();
+    expect(first.sessions.has(owner)).toBe(true);
+    expect(first.sessions.get(owner).created).toBe(created);
+    Date.now.mockReturnValue(created + MAX_SESSION_AGE);
+    await expect(first.status(owner)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+    expect(fs.existsSync(stateFile)).toBe(false);
+    await first.close();
+  });
 });

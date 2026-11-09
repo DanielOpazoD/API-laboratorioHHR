@@ -1,8 +1,9 @@
 const express = require('express');
-const { ExalabService } = require('../services/exalabService');
+const { ExalabService, KEEP_ALIVE_MS, DEFAULT_STATE_FILE } = require('../services/exalabService');
 const { ExalabError } = require('../services/exalabHtml');
 let service;
-const createExalabRoutes = (getService = () => (service ||= new ExalabService())) => {
+// Production keeps connected sessions across restarts and refreshes them in Exalab while idle.
+const createExalabRoutes = (getService = () => (service ||= new ExalabService({ stateFile: DEFAULT_STATE_FILE, keepAliveMs: KEEP_ALIVE_MS }))) => {
   const router = express.Router();
   const route = operation => async (req, res) => {
     try { await operation(getService(), req, res); }

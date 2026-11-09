@@ -1,11 +1,17 @@
 const { randomBytes, createHash, createCipheriv, createDecipheriv } = require('node:crypto');
+const fs = require('node:fs');
+const nodePath = require('node:path');
 const { PDFParse } = require('pdf-parse');
 const config = require('../config/env');
 const { BASE, ExalabError, ExalabHtml, normalizeRut, validDate, validateSource, changed, expired } = require('./exalabHtml');
 const PREFIX = 'hhr-exalab://report/';
 const MAX_PDF = 4 * 1024 * 1024;
 const SESSION_TTL = 60 * 60_000;
-const MAX_SESSION_AGE = 8 * SESSION_TTL;
+// A clinical shift. Keep-alive refreshes Exalab's own idle timeout, never this absolute limit.
+const MAX_SESSION_AGE = 12 * SESSION_TTL;
+const KEEP_ALIVE_MS = 10 * 60_000;
+const DEFAULT_STATE_FILE = nodePath.join(process.env.SYSLAB_STATE_DIR || nodePath.join(__dirname, '../state'), 'exalab-sessions.bin');
+const stateKey = () => createHash('sha256').update('exalab-sessions:' + config.apiToken).digest();
 const PAIR_TTL = 5 * 60_000;
 const digest = value => createHash('sha256').update(value).digest('hex');
 const assertOwner = owner => {
@@ -45,14 +51,80 @@ const normalizeSession = input => {
 };
 
 class ExalabService {
-  constructor({ fetchImpl = fetch, html = new ExalabHtml(), pdfText = readPdfText } = {}) {
+  /** `stateFile` keeps connected sessions sealed across restarts; `keepAliveMs` refreshes them in Exalab. */
+  constructor({ fetchImpl = fetch, html = new ExalabHtml(), pdfText = readPdfText, stateFile = null, keepAliveMs = 0 } = {}) {
     this.fetch = fetchImpl; this.html = html; this.pdfText = pdfText;
     this.sessions = new Map(); this.pairs = new Map(); this.bindings = new Map();
+    this.stateFile = stateFile; this.keepAliveMs = keepAliveMs;
+    this.restore();
+    if (keepAliveMs > 0) {
+      this.keepAliveTimer = setInterval(() => { this.keepAlive().catch(() => {}); }, keepAliveMs);
+      this.keepAliveTimer.unref?.();
+    }
+  }
+  /** Sealed with a key derived from the bridge token; only owner hashes, cookies and timestamps. */
+  persist() {
+    if (!this.stateFile) return;
+    try {
+      if (!this.sessions.size) { fs.rmSync(this.stateFile, { force: true }); return; }
+      const payload = JSON.stringify([...this.sessions].map(([owner, session]) => ({
+        owner, id: session.id, cookies: [...session.cookies], userAgent: session.userAgent,
+        created: session.created, touched: session.touched,
+      })));
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', stateKey(), iv);
+      const bytes = Buffer.concat([cipher.update(payload), cipher.final()]);
+      fs.mkdirSync(nodePath.dirname(this.stateFile), { recursive: true, mode: 0o700 });
+      const temporary = `${this.stateFile}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+      fs.writeFileSync(temporary, Buffer.concat([iv, cipher.getAuthTag(), bytes]), { mode: 0o600 });
+      fs.renameSync(temporary, this.stateFile);
+    } catch {
+      console.warn('[exalab] No se pudieron guardar las sesiones conectadas; siguen activas en memoria.');
+    }
+  }
+  restore() {
+    if (!this.stateFile || !fs.existsSync(this.stateFile)) return;
+    try {
+      const bytes = fs.readFileSync(this.stateFile);
+      const decipher = createDecipheriv('aes-256-gcm', stateKey(), bytes.subarray(0, 12));
+      decipher.setAuthTag(bytes.subarray(12, 28));
+      const stored = JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString());
+      if (!Array.isArray(stored)) throw new Error('invalid');
+      for (const entry of stored) {
+        assertOwner(entry?.owner);
+        if (!Array.isArray(entry.cookies) || !Number.isFinite(entry.created) || !Number.isFinite(entry.touched) ||
+            typeof entry.id !== 'string') throw new Error('invalid');
+        const session = normalizeSession({
+          userAgent: entry.userAgent,
+          cookies: entry.cookies.map(([name, value]) => ({ name, value, domain: 'exalab.saludoriente.cl' })),
+        });
+        Object.assign(session, { id: entry.id, created: entry.created, touched: entry.touched });
+        this.sessions.set(entry.owner, session);
+      }
+    } catch {
+      this.sessions.clear();
+      console.warn('[exalab] Sesiones guardadas ilegibles; el puente empieza sin sesiones conectadas.');
+    }
+    this.prune();
+  }
+  /** One serialized preflight per idle session: refreshes Exalab's idle timeout, not the bridge's age limit. */
+  async keepAlive(now = Date.now()) {
+    this.prune();
+    for (const [owner, session] of [...this.sessions]) {
+      if (now - session.touched < this.keepAliveMs) continue;
+      // SESSION_REQUIRED drops the session inside withSession; a network failure keeps it.
+      await this.withSession(owner, active => this.preflight(active)).catch(() => {});
+    }
+    this.persist();
   }
   prune() {
+    let removed = false;
     for (const [owner, session] of this.sessions) {
-      if (Date.now() - session.touched >= SESSION_TTL || Date.now() - session.created >= MAX_SESSION_AGE) this.sessions.delete(owner);
+      if (Date.now() - session.touched >= SESSION_TTL || Date.now() - session.created >= MAX_SESSION_AGE) {
+        this.sessions.delete(owner); removed = true;
+      }
     }
+    if (removed) this.persist();
     for (const [pair, binding] of this.pairs) if (binding.expires <= Date.now()) this.pairs.delete(pair);
     for (const [owner, binding] of this.bindings) if (binding.expires <= Date.now()) this.bindings.delete(owner);
   }
@@ -78,10 +150,12 @@ class ExalabService {
     if (!this.sessions.has(binding.owner) && this.sessions.size >= 100) throw new ExalabError('BUSY', 'Intenta conectar Exalab más tarde.', 503);
     this.sessions.set(binding.owner, session);
     this.bindings.delete(binding.owner);
-    return { connected: true };
+    this.persist();
+    return { connected: true, expiresAt: session.created + MAX_SESSION_AGE };
   }
   disconnect(owner) {
-    assertOwner(owner); this.sessions.delete(owner);
+    assertOwner(owner);
+    if (this.sessions.delete(owner)) this.persist();
     this.bindings.delete(owner);
     for (const [key, value] of this.pairs) if (value.owner === owner) this.pairs.delete(key);
     return { connected: false };
@@ -101,8 +175,13 @@ class ExalabService {
         if (this.sessions.get(owner) !== session) throw expired();
         return result;
       } catch (error) {
-        if (error.code === 'SESSION_REQUIRED' && this.sessions.get(owner) === session) this.sessions.delete(owner);
+        if (error.code === 'SESSION_REQUIRED' && this.sessions.get(owner) === session) {
+          this.sessions.delete(owner); session.dirty = true;
+        }
         throw error;
+      } finally {
+        // Exalab may rotate its cookies; a restart must resume with the current ones.
+        if (session.dirty) { session.dirty = false; this.persist(); }
       }
     });
     session.pending = run.catch(() => {});
@@ -128,7 +207,7 @@ class ExalabService {
         const match = /^(PHPSESSID|cf_clearance)=([^;]*)/.exec(cookie);
         if (!match) continue;
         if (!match[2] || /[\r\n]/.test(match[2]) || match[2].length > 8192 || /(?:^|;)\s*Max-Age=0(?:;|$)/i.test(cookie)) throw expired();
-        session.cookies.set(match[1], match[2]);
+        if (session.cookies.get(match[1]) !== match[2]) { session.cookies.set(match[1], match[2]); session.dirty = true; }
       }
       const chunks = []; let size = 0;
       const reader = response.body.getReader();
@@ -159,7 +238,10 @@ class ExalabService {
     if (!/\bid=['"]rut['"]/.test(html)) throw expired();
   }
   async status(owner) {
-    return this.withSession(owner, async session => { await this.preflight(session); return { connected: true }; });
+    return this.withSession(owner, async session => {
+      await this.preflight(session);
+      return { connected: true, expiresAt: session.created + MAX_SESSION_AGE };
+    });
   }
   seal(payload) {
     const iv = randomBytes(12);
@@ -203,6 +285,6 @@ class ExalabService {
       return bytes;
     });
   }
-  async close() { this.sessions.clear(); this.pairs.clear(); this.bindings.clear(); await this.html.close?.(); }
+  async close() { clearInterval(this.keepAliveTimer); this.sessions.clear(); this.pairs.clear(); this.bindings.clear(); await this.html.close?.(); }
 }
-module.exports = { ExalabService, assertPdfPatient, normalizeSession, MAX_PDF };
+module.exports = { ExalabService, assertPdfPatient, normalizeSession, MAX_PDF, MAX_SESSION_AGE, KEEP_ALIVE_MS, DEFAULT_STATE_FILE };
