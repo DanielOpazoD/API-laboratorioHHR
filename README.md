@@ -20,9 +20,14 @@ El alcance inicial es PC con HHR y la extensión activada. La vinculación se in
 desde HHR en Chrome de ese PC, usando la página de consentimiento de la extensión.
 El Mac mini comprueba la sesión antes de aceptarla y realiza las consultas y las
 descargas por HTTPS. No se automatiza ClaveÚnica ni se almacenan sus
-contraseñas. Las sesiones permanecen solo en memoria, aisladas por operador,
-durante una hora sin uso y un máximo de ocho horas; Exalab puede vencerlas antes.
-Reiniciar requiere reconectar. Las referencias de PDF vencen en 30 minutos y se
+contraseñas. Las sesiones quedan aisladas por operador y duran un máximo de doce
+horas (un turno). Se guardan cifradas en `state/exalab-sessions.bin` (permisos 0600,
+clave derivada del token del puente), así que un reinicio o una actualización del
+puente no obliga a reconectar. Cada diez minutos el puente comprueba las sesiones sin
+uso para que Exalab no las venza por inactividad; esa comprobación no alarga el máximo
+de doce horas. Si Exalab cierra la sesión, el puente la descarta también del disco.
+Un archivo dañado o cifrado con otro token se ignora y el puente empieza sin sesiones.
+Desconectar borra la sesión de memoria y del disco. Las referencias de PDF vencen en 30 minutos y se
 invalidan al desconectar o sustituir la sesión. Las lecturas de un operador se
 serializan para evitar mezclar respuestas del generador de informes.
 
