@@ -5,7 +5,7 @@ const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
 const { createJobRoutes } = require('./routes/jobs');
 
-const createApp = ({ getJobs } = {}) => {
+const createApp = ({ getJobs, getExalab } = {}) => {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -22,6 +22,7 @@ const createApp = ({ getJobs } = {}) => {
     next();
   });
   app.use(express.json({ limit: '1mb' }));
+  app.use('/api/exalab', require('./routes/exalab').createExalabRoutes(getExalab));
   // Process liveness only: recovery must not confuse a Syslab outage with a dead Node process.
   app.get('/live', (_req, res) => res.json({ success: true, service: 'syslab-scraper' }));
   app.get('/health', async (_req, res) => {
